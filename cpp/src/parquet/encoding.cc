@@ -2171,6 +2171,7 @@ class DeltaBitPackEncoder : public EncoderImpl, virtual public TypedEncoder<DTyp
   uint32_t values_current_block_{0};
   uint32_t total_value_count_{0};
   UT first_value_{0};
+  UT first_value_current_block_{0};
   UT current_value_{0};
   ArrowPoolVector<UT> deltas_;
   std::shared_ptr<ResizableBuffer> bits_buffer_;
@@ -2191,6 +2192,13 @@ void DeltaBitPackEncoder<DType>::Put(const T* src, int num_values) {
     idx = 1;
   }
   total_value_count_ += num_values;
+
+  // If we are starting a new block, write the block header with first value, not min delta
+  if (values_current_block_ == 0) {
+    current_value_ = src[0];
+    first_value_current_block_ = current_value_;
+    idx = 1;
+  }
 
   while (idx < num_values) {
     UT value = static_cast<UT>(src[idx]);
@@ -2216,7 +2224,10 @@ void DeltaBitPackEncoder<DType>::FlushBlock() {
 
   const UT min_delta =
       *std::min_element(deltas_.begin(), deltas_.begin() + values_current_block_);
+  /*
   bit_writer_.PutZigZagVlqInt(static_cast<T>(min_delta));
+  */
+  bit_writer_.PutZigZagVlqInt(static_cast<T>(first_value_current_block_));
 
   // Call to GetNextBytePtr reserves mini_blocks_per_block_ bytes of space to write
   // bit widths of miniblocks as they become known during the encoding.
@@ -2237,12 +2248,14 @@ void DeltaBitPackEncoder<DType>::FlushBlock() {
     // The minimum number of bits required to write any of values in deltas_ vector.
     // See overflow comment above.
     const auto bit_width = bit_width_data[i] =
-        bit_util::NumRequiredBits(max_delta - min_delta);
+        bit_util::Power2NumRequiredBits(max_delta - min_delta);
 
     for (uint32_t j = start; j < start + values_current_mini_block; j++) {
       // See overflow comment above.
+      /*
       const UT value = deltas_[j] - min_delta;
-      bit_writer_.PutValue(value, bit_width);
+      */
+      bit_writer_.PutValue(deltas_[j], bit_width);
     }
     // If there are not enough values to fill the last mini block, we pad the mini block
     // with zeroes so that its length is the number of values in a full mini block
