@@ -271,7 +271,7 @@ static inline int CountTrailingZeros(uint64_t value) {
 static inline int NextPower2Int(int n) {
   // Taken from
   // http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-  if n == 0 return 0;
+  if (n == 0) return 0;
   n--;
   n |= n >> 1;
   n |= n >> 2;
