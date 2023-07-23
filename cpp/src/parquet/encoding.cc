@@ -2195,9 +2195,7 @@ void DeltaBitPackEncoder<DType>::Put(const T* src, int num_values) {
 
   // If we are starting a new block, write the block header with first value, not min delta
   if (values_current_block_ == 0) {
-    current_value_ = src[0];
     first_value_current_block_ = current_value_;
-    idx = 1;
   }
 
   while (idx < num_values) {
@@ -2407,6 +2405,11 @@ class DeltaBitPackDecoder : public DecoderImpl, virtual public TypedDecoder<DTyp
     return GetInternal(buffer, max_values);
   }
 
+  int DecodeBlocks(T* buffer, int max_values) override {
+    // GetInternalBlocks
+    return GetInternal(buffer, max_values);
+  }
+
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<DType>::Accumulator* out) override {
@@ -2482,7 +2485,7 @@ class DeltaBitPackDecoder : public DecoderImpl, virtual public TypedDecoder<DTyp
   void InitBlock() {
     DCHECK_GT(total_values_remaining_, 0) << "InitBlock called at EOF";
 
-    if (!decoder_->GetZigZagVlqInt(&min_delta_))
+    if (!decoder_->GetZigZagVlqInt(&first_value_in_block_)) {
       ParquetException::EofException("InitBlock EOF");
 
     // read the bitwidth of each miniblock
@@ -2551,6 +2554,7 @@ class DeltaBitPackDecoder : public DecoderImpl, virtual public TypedDecoder<DTyp
           values_decode) {
         ParquetException::EofException();
       }
+      /*
       for (int j = 0; j < values_decode; ++j) {
         // Addition between min_delta, packed int and last_value should be treated as
         // unsigned addition. Overflow is as expected.
@@ -2558,6 +2562,7 @@ class DeltaBitPackDecoder : public DecoderImpl, virtual public TypedDecoder<DTyp
                         static_cast<UT>(last_value_);
         last_value_ = buffer[i + j];
       }
+      */
       values_remaining_current_mini_block_ -= values_decode;
       i += values_decode;
     }
@@ -2591,6 +2596,7 @@ class DeltaBitPackDecoder : public DecoderImpl, virtual public TypedDecoder<DTyp
   // always be false. Otherwise, it will be true when first block initialized.
   bool first_block_initialized_;
   T min_delta_;
+  T first_value_in_block_;
   uint32_t mini_block_idx_;
   std::shared_ptr<ResizableBuffer> delta_bit_widths_;
   int delta_bit_width_;

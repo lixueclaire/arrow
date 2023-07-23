@@ -278,6 +278,8 @@ class TypedDecoder : virtual public Decoder {
   /// at the end of the current data page.
   virtual int Decode(T* buffer, int max_values) = 0;
 
+  virtual int DecodeBlocks(T* buffer, int max_values) = 0;
+
   /// \brief Decode the values in this data page but leave spaces for null entries.
   ///
   /// \param[in] buffer destination for decoded values
