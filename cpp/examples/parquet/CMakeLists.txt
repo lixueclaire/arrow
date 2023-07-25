@@ -19,8 +19,10 @@ add_executable(parquet-low-level-example low_level_api/reader_writer.cc)
 add_executable(parquet-low-level-example2 low_level_api/reader_writer2.cc)
 add_executable(parquet-arrow-example parquet_arrow/reader_writer.cc)
 add_executable(parquet-stream-api-example parquet_stream_api/stream_reader_writer.cc)
+add_executable(parquet-graphar-label-example graphar/test.cc graphar/label.cc)
 target_include_directories(parquet-low-level-example PRIVATE low_level_api/)
 target_include_directories(parquet-low-level-example2 PRIVATE low_level_api/)
+target_include_directories(parquet-graphar-label-example PRIVATE graphar/)
 
 # The variables in these files are for illustration purposes
 set(PARQUET_EXAMPLES_WARNING_SUPPRESSIONS low_level_api/reader_writer.cc
@@ -59,6 +61,7 @@ target_link_libraries(parquet-arrow-example ${PARQUET_EXAMPLE_LINK_LIBS})
 target_link_libraries(parquet-low-level-example ${PARQUET_EXAMPLE_LINK_LIBS})
 target_link_libraries(parquet-low-level-example2 ${PARQUET_EXAMPLE_LINK_LIBS})
 target_link_libraries(parquet-stream-api-example ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet-graphar-label-example ${PARQUET_EXAMPLE_LINK_LIBS})
 
 if(PARQUET_REQUIRE_ENCRYPTION)
   target_link_libraries(parquet-encryption-example ${PARQUET_EXAMPLE_LINK_LIBS})
@@ -70,7 +73,8 @@ add_dependencies(parquet
                  parquet-low-level-example
                  parquet-low-level-example2
                  parquet-arrow-example
-                 parquet-stream-api-example)
+                 parquet-stream-api-example
+                 parquet-graphar-label-example)
 
 if(PARQUET_REQUIRE_ENCRYPTION)
   add_dependencies(parquet parquet-encryption-example
