@@ -32,7 +32,7 @@ using parquet::schema::GroupNode;
 using parquet::schema::PrimitiveNode;
 
 /// constants related to encoding and decoding of the labels
-constexpr int TOT_LABEL_NUM = 8;         // the number of total labels
+constexpr int MAX_LABEL_NUM = 16;        // the maximum number of labels
 constexpr int MAX_DECODED_NUM = 100000;  // the maximum number of decoded values
 /// constants related to the parquet file
 constexpr int NUM_ROWS_PER_ROW_GROUP = 2000;  // the number of rows per row group
@@ -42,11 +42,13 @@ constexpr int BATCH_SIZE = 1024;              // the batch size
 // DEFAULT_MAX_ROW_GROUP_LENGTH = 1024 * 1024
 
 /// Setup the schema of the parquet file
-static std::shared_ptr<GroupNode> SetupSchema(const std::string* label_names) {
+static std::shared_ptr<GroupNode> SetupSchema(const int label_num,
+                                              const std::string* label_names,
+                                              const bool contain_id_column) {
   parquet::schema::NodeVector fields;
 
-  // Add TOT_LABEL_NUM primitive nodes with specific names to the group node
-  for (int i = 0; i < TOT_LABEL_NUM; ++i) {
+  // Add label_num primitive nodes with specific names to the group node
+  for (int i = 0; i < label_num; ++i) {
     // Create a primitive node with type:BOOLEAN, repetition:REQUIRED
     if (label_names == nullptr) {
       fields.push_back(PrimitiveNode::Make("label_" + std::to_string(i),
@@ -58,9 +60,11 @@ static std::shared_ptr<GroupNode> SetupSchema(const std::string* label_names) {
     }
   }
 
-  // Create a primitive node named 'id' with type:INT64, repetition:REQUIRED,
-  fields.push_back(
-      PrimitiveNode::Make("id", Repetition::REQUIRED, Type::INT64, ConvertedType::NONE));
+  if (contain_id_column) {
+    // Create a primitive node named 'id' with type:INT64, repetition:REQUIRED,
+    fields.push_back(PrimitiveNode::Make("id", Repetition::REQUIRED, Type::INT64,
+                                         ConvertedType::NONE));
+  }
 
   // Create a GroupNode named 'schema' using the primitive nodes defined above
   // This GroupNode is the root node of the schema tree
@@ -86,9 +90,9 @@ static std::vector<std::pair<int, int> > GetValidIntervals(
   // initialization
   std::vector<std::pair<int, int> > intervals;
   int current_pos = 0, previous_pos = 0;
-  int pos[TOT_LABEL_NUM] = {0};
-  int index[TOT_LABEL_NUM] = {0};
-  bool state[TOT_LABEL_NUM];
+  int pos[MAX_LABEL_NUM] = {0};
+  int index[MAX_LABEL_NUM] = {0};
+  bool state[MAX_LABEL_NUM];
   for (int i = 0; i < column_number; ++i) {
     state[i] = repeated_values[i][index[i]];
   }
@@ -128,10 +132,17 @@ static std::vector<std::pair<int, int> > GetValidIntervals(
 }
 
 std::vector<std::pair<int, int> > read_parquet_file_and_get_valid_intervals(
-    const char* parquet_filename, const int row_num, const int column_num,
-    int32_t repeated_nums[][MAX_DECODED_NUM], bool repeated_values[][MAX_DECODED_NUM],
-    int32_t* true_num, int32_t* false_num, int32_t* length,
-    const std::function<bool(bool*, int)>& IsValid);
+    const char* parquet_filename, const int row_num, const int tot_label_num,
+    const int tested_label_num, int32_t repeated_nums[][MAX_DECODED_NUM],
+    bool repeated_values[][MAX_DECODED_NUM], int32_t* true_num, int32_t* false_num,
+    int32_t* length, const std::function<bool(bool*, int)>& IsValid);
 
 void generate_parquet_file(const char* parquet_filename, const int row_num,
-                           const std::string* label_names = nullptr);
+                           const int label_num, const std::string* label_names = nullptr,
+                           const bool contain_id_column = true);
+
+static inline void validate_column(const int col_id, const int row_num,
+                                   int32_t repeated_nums[][MAX_DECODED_NUM],
+                                   bool repeated_values[][MAX_DECODED_NUM],
+                                   int32_t* true_num, int32_t* false_num,
+                                   int32_t* length);
