@@ -271,7 +271,7 @@ static inline int CountTrailingZeros(uint64_t value) {
 static inline int NextPower2Int(int n) {
   // Taken from
   // http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-  if n == 0 return 0;
+  if (n == 0) return 0;
   n--;
   n |= n >> 1;
   n |= n >> 2;
@@ -285,7 +285,9 @@ static inline int NextPower2Int(int n) {
 // Returns the minimum number of bits needed to represent an unsigned value
 static inline int NumRequiredBits(uint64_t x) { return 64 - CountLeadingZeros(x); }
 
-static inline int Power2NumRequiredBits(uint64_t x) { return NextPower2Int(64 - CountLeadingZeros(x)); }
+static inline int Power2NumRequiredBits(uint64_t x) {
+  return NextPower2Int(64 - CountLeadingZeros(x));
+}
 
 // Returns ceil(log2(x)).
 static inline int Log2(uint64_t x) {
