@@ -415,9 +415,9 @@ class BooleanDecoder : virtual public TypedDecoder<BooleanType> {
   /// at the end of the current data page.
   virtual int Decode(uint8_t* buffer, int max_values) = 0;
 
-  /// Decode for labels in GraphAr
+  /// Decode labels in GraphAr
   virtual int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& true_num,
-                     int32_t& false_num, int32_t& length, int max_values) {
+                     int32_t& false_num, int32_t& length, int max_values) override {
     /// ！！！ not implemented
     throw ParquetException(
         "Decode() for GraphAr labels is not implemented in BooleanDecoder!");

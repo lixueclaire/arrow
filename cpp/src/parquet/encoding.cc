@@ -1162,6 +1162,14 @@ class PlainBooleanDecoder : public DecoderImpl, virtual public BooleanDecoder {
   // Two flavors of bool decoding
   int Decode(uint8_t* buffer, int max_values) override;
   int Decode(bool* buffer, int max_values) override;
+  // Decode for GraphAr labels
+  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& true_num,
+             int32_t& false_num, int32_t& length, int max_values) override {
+    /// ！！！ not implemented
+    throw ParquetException(
+        "Decode() for GraphAr labels is not implemented in PlainBooleanDecoder!");
+    return 0;
+  }
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<BooleanType>::Accumulator* out) override;
@@ -2193,7 +2201,8 @@ void DeltaBitPackEncoder<DType>::Put(const T* src, int num_values) {
   }
   total_value_count_ += num_values;
 
-  // If we are starting a new block, write the block header with first value, not min delta
+  // If we are starting a new block, write the block header with first value, not min
+  // delta
   if (values_current_block_ == 0) {
     current_value_ = src[0];
     first_value_current_block_ = current_value_;
@@ -3000,6 +3009,22 @@ class RleBooleanDecoder : public DecoderImpl, virtual public BooleanDecoder {
     max_values = std::min(max_values, num_values_);
 
     if (decoder_->GetBatch(buffer, max_values) != max_values) {
+      ParquetException::EofException();
+    }
+    num_values_ -= max_values;
+    return max_values;
+  }
+
+  // The decoding method for GraphAr labels.
+  // Decode the values into two buffers, one for the repeated numbers and one for the
+  // repeated values. The total number of true and false values as well as the length
+  // of the decoded buffer are returned in true_num, false_num and length.
+  // The number of values decoded is the return value of the function.
+  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& true_num,
+             int32_t& false_num, int32_t& length, int max_values) override {
+    max_values = std::min(max_values, num_values_);
+    if (decoder_->GetBatch<bool>(repeated_nums, repeated_values, true_num, false_num,
+                                 length, max_values) != max_values) {
       ParquetException::EofException();
     }
     num_values_ -= max_values;
