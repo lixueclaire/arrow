@@ -119,6 +119,14 @@ class RleDecoder {
   template <typename T>
   int GetBatch(T* values, int batch_size);
 
+  /// GetBatch method for decoding GraphAr labels.
+  /// Get a batch of values. Gets the repeated numbers, repeated values, the
+  /// total numbers of true/false values, and the length of the batch.
+  /// Returns the number of decoded elements.
+  template <typename T>
+  int GetBatch(int32_t* repeated_num, T* repeated_value, int32_t& true_num,
+               int32_t& false_num, int32_t& length, int batch_size);
+
   /// Like GetBatch but add spacing for null entries
   template <typename T>
   int GetBatchSpaced(int batch_size, int null_count, const uint8_t* valid_bits,
@@ -327,6 +335,65 @@ inline int RleDecoder::GetBatch(T* values, int batch_size) {
       out += literal_batch;
     } else {
       if (!NextCounts<T>()) return values_read;
+    }
+  }
+
+  return values_read;
+}
+
+// GetBatch method for decoding GraphAr labels.
+template <typename T>
+inline int RleDecoder::GetBatch(int32_t* repeated_nums, T* repeated_values,
+                                int32_t& true_num, int32_t& false_num, int32_t& length,
+                                int batch_size) {
+  DCHECK_EQ(bit_width_, 1);  // the bit_width of bool must be 1
+  int values_read = 0;
+
+  while (values_read < batch_size) {
+    int remaining = batch_size - values_read;
+
+    if (repeat_count_ > 0) {  // Repeated value case.
+      int repeat_batch = std::min(remaining, repeat_count_);
+      // update true_num and false_num
+      if (current_value_ == 1) {
+        true_num += repeat_batch;
+      } else {
+        false_num += repeat_batch;
+      }
+      // update repeated_nums and repeated_values
+      length++;
+      *repeated_nums = repeat_batch;
+      repeated_nums++;
+      *repeated_values = current_value_;
+      repeated_values++;
+      // update counters
+      repeat_count_ -= repeat_batch;
+      values_read += repeat_batch;
+    } else if (literal_count_ > 0) {  // Literal value case.
+      int literal_batch = std::min(remaining, literal_count_);
+      // read and update repeated_values
+      int actual_read = bit_reader_.GetBatch(bit_width_, repeated_values, literal_batch);
+      if (actual_read != literal_batch) {
+        return values_read;
+      }
+      // update true_num and false_num
+      for (int i = 0; i < literal_batch; i++) {
+        if (repeated_values[i] == 1) {
+          true_num++;
+        } else {
+          false_num++;
+        }
+      }
+      // update repeated_nums
+      std::fill(repeated_nums, repeated_nums + literal_batch, 1);
+      length += literal_batch;
+      repeated_values += literal_batch;
+      repeated_nums += literal_batch;
+      // update counters
+      literal_count_ -= literal_batch;
+      values_read += literal_batch;
+    } else {
+      if (!NextCounts<bool>()) return values_read;
     }
   }
 
