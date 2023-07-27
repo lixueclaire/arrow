@@ -665,6 +665,12 @@ class ColumnReaderImplBase {
     return num_decoded;
   }
 
+  int64_t ReadBitMap(int64_t batch_size, uint64_t* bit_map) {
+    int64_t num_decoded =
+        current_decoder_->DecodeBitMap(bit_map, static_cast<int>(batch_size));
+    return num_decoded;
+  }
+
   // Read up to batch_size values from the current data page into the
   // pre-allocated memory T*, leaving spaces for null entries according
   // to the def_levels.
@@ -904,6 +910,12 @@ class ColumnReaderImplBase {
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
+        case Encoding::DELTA_BINARY_PACKED_FOR_BIT_MAP: {
+          auto decoder = MakeTypedDecoder<DType>(Encoding::DELTA_BINARY_PACKED_FOR_BIT_MAP, descr_);
+          current_decoder_ = decoder.get();
+          decoders_[static_cast<int>(encoding)] = std::move(decoder);
+          break;
+        }
         case Encoding::DELTA_BYTE_ARRAY: {
           auto decoder = MakeTypedDecoder<DType>(Encoding::DELTA_BYTE_ARRAY, descr_);
           current_decoder_ = decoder.get();
@@ -996,6 +1008,8 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 
   int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                     T* values, int64_t* values_read) override;
+
+  int64_t ReadBatch(int64_t batch_size, uint64_t* bit_map, int64_t* values_read) override;
 
   int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
@@ -1142,6 +1156,35 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def
   ReadLevels(batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
 
   *values_read = this->ReadValues(values_to_read, values);
+  int64_t total_values = std::max<int64_t>(num_def_levels, *values_read);
+  int64_t expected_values =
+      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  if (total_values == 0 && expected_values > 0) {
+    std::stringstream ss;
+    ss << "Read 0 values, expected " << expected_values;
+    ParquetException::EofException(ss.str());
+  }
+  this->ConsumeBufferedValues(total_values);
+
+  return total_values;
+}
+
+template <typename DType>
+int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, uint64_t* bit_map,
+                                                int64_t* values_read) {
+  // HasNext invokes ReadNewPage
+  if (!HasNext()) {
+    *values_read = 0;
+    return 0;
+  }
+
+  // TODO(wesm): keep reading data pages until batch_size is reached, or the
+  // row group is finished
+  int64_t num_def_levels = 0;
+  int64_t values_to_read = 0;
+  ReadLevels(batch_size, nullptr, nullptr, &num_def_levels, &values_to_read);
+
+  *values_read = this->ReadBitMap(values_to_read, bit_map);
   int64_t total_values = std::max<int64_t>(num_def_levels, *values_read);
   int64_t expected_values =
       std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);

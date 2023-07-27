@@ -278,6 +278,11 @@ class TypedDecoder : virtual public Decoder {
   /// at the end of the current data page.
   virtual int Decode(T* buffer, int max_values) = 0;
 
+  virtual int DecodeBitMap(uint64_t* bitmap, int max_values) {
+    throw ParquetException("DecodeDecodeBitMap not implemented");
+
+  }
+
   /// \brief Decode the values in this data page but leave spaces for null entries.
   ///
   /// \param[in] buffer destination for decoded values

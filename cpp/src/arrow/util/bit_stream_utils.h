@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <iostream>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -31,6 +32,77 @@
 
 namespace arrow {
 namespace bit_util {
+
+inline void set_bit(uint64_t* bitmap, uint64_t curr) {
+    bitmap[curr >> 6] |= (1 << (curr & 63));
+}
+
+inline void unpack1_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+  curr += ((*in)) & 1; // d0
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 1) & 1; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 2) & 1; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 3) & 1; // d2
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 4) & 1; // d3
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 5) & 1; // d4
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 6) & 1; // d5
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 7) & 1; // d6
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 8) & 1; // d7
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 9) & 1; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 10) & 1; // d2
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 11) & 1; // d3
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 12) & 1; // d4
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 13) & 1; // d5
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 14) & 1; // d6
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 15) & 1; // d7
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 16) & 1; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 17) & 1; // d2
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 18) & 1; // d3
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 19) & 1; // d4
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 20) & 1; // d5
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 21) & 1; // d6
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 22) & 1; // d7
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 23) & 1; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 24) & 1; // d2
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 25) & 1; // d3
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 26) & 1; // d4
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 27) & 1; // d5
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 28) & 1; // d6
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 29) & 1; // d7
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 30) & 1; // d7
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 31); // d7
+  set_bit(bitmap, curr);
+}
 
 /// Utility class to write bit/byte streams.  This class can write data to either be
 /// bit packed or byte aligned (and a single stream that has a mix of both).
@@ -146,6 +218,8 @@ class BitReader {
   /// Get a number of values from the buffer. Return the number of values actually read.
   template <typename T>
   int GetBatch(int num_bits, T* v, int batch_size);
+
+  int GetBitMap(int num_bits, uint64_t* bit_map, uint64_t* curr, int batch_size);
 
   /// Reads a 'num_bytes'-sized value from the buffer and stores it in 'v'. T
   /// needs to be a little-endian native type and big enough to store
@@ -307,6 +381,42 @@ inline void GetValue_(int num_bits, T* v, int max_bytes, const uint8_t* buffer,
   }
 }
 
+inline void GetBitMap_(int num_bits, uint64_t* bit_map, uint64_t* curr, int max_bytes, const uint8_t* buffer,
+                      int* bit_offset, int* byte_offset, uint64_t* buffered_values, int unpack_size) {
+  int need_bits = num_bits * unpack_size;
+  DCHECK_LE(need_bits, 64 - *bit_offset);
+  uint32_t bits_1 = 0, bits_2 = 0;
+  if (need_bits <= 32) {
+    bits_1 = static_cast<uint32_t>(bit_util::TrailingBits(*buffered_values, *bit_offset + need_bits) >>
+                      *bit_offset);
+  } else {
+    bits_1 = static_cast<uint32_t>(bit_util::TrailingBits(*buffered_values, *bit_offset + 32) >>
+                      *bit_offset);
+    bits_2 = static_cast<uint32_t>(bit_util::TrailingBits((*buffered_values >> *bit_offset),  need_bits) >> 32);
+  }
+  switch(num_bits) {
+    case 1: {
+      unpack1_8(&bits_1, bit_map, *curr);
+      if (bits_2) {
+      unpack1_8(&bits_2, bit_map, *curr);
+      }
+      break;
+    }
+    default: {
+      DCHECK(false) << "num_bits should be 1, 2 or 4, got " << num_bits;
+    }
+  }
+
+  *bit_offset += need_bits;
+  if (*bit_offset >= 64) {
+    *byte_offset += 8;
+    *bit_offset -= 64;
+
+    ResetBufferedValues_(buffer, *byte_offset, max_bytes - *byte_offset, buffered_values);
+    DCHECK_LE(*bit_offset, 64);
+  }
+}
+
 }  // namespace detail
 
 template <typename T>
@@ -391,6 +501,59 @@ inline int BitReader::GetBatch(int num_bits, T* v, int batch_size) {
     detail::GetValue_(num_bits, &v[i], max_bytes, buffer, &bit_offset, &byte_offset,
                       &buffered_values);
   }
+
+  bit_offset_ = bit_offset;
+  byte_offset_ = byte_offset;
+  buffered_values_ = buffered_values;
+
+  return batch_size;
+}
+
+inline int BitReader::GetBitMap(int num_bits, uint64_t* bit_map, uint64_t* curr, int batch_size) {
+  DCHECK(buffer_ != NULL);
+  DCHECK_LE(num_bits, 8) << "num_bits: " << num_bits;
+
+  int bit_offset = bit_offset_;
+  int byte_offset = byte_offset_;
+  uint64_t buffered_values = buffered_values_;
+  int max_bytes = max_bytes_;
+  const uint8_t* buffer = buffer_;
+
+  const int64_t needed_bits = num_bits * static_cast<int64_t>(batch_size);
+  constexpr uint64_t kBitsPerByte = 8;
+  const int64_t remaining_bits =
+      static_cast<int64_t>(max_bytes - byte_offset) * kBitsPerByte - bit_offset;
+  if (remaining_bits < needed_bits) {
+    batch_size = static_cast<int>(remaining_bits / num_bits);
+  }
+
+  int i = 0;
+  if (ARROW_PREDICT_FALSE(bit_offset != 0)) {
+    int unpack_size = std::min(batch_size, (64 - bit_offset) / num_bits);
+    detail::GetBitMap_(num_bits, bit_map, curr, max_bytes, buffer, &bit_offset, &byte_offset,
+          &buffered_values, unpack_size);
+    std::cout << "unpack size from buffer value: " << unpack_size << std::endl;
+    i += unpack_size;
+  }
+
+  int num_to_unpack = ((batch_size - i) * num_bits) / 32 * 32;
+  if (num_to_unpack > 0) {
+    int num_loops = num_to_unpack / 32;
+    const uint32_t* start = reinterpret_cast<const uint32_t*>(buffer + byte_offset);
+    for (int k = 0; k < num_loops; k++) {
+      unpack1_8(start + k, bit_map, *curr);
+    }
+    i += num_to_unpack;
+    std::cout << "unpack size from buffer: " << num_to_unpack << std::endl;
+    byte_offset += num_loops * 4;
+  }
+
+  detail::ResetBufferedValues_(buffer, byte_offset, max_bytes - byte_offset,
+                               &buffered_values);
+
+  DCHECK_LE(batch_size - i, (64 - bit_offset) / num_bits);
+  detail::GetBitMap_(num_bits, bit_map, curr, max_bytes, buffer, &bit_offset, &byte_offset,
+        &buffered_values, batch_size - i);
 
   bit_offset_ = bit_offset;
   byte_offset_ = byte_offset;
