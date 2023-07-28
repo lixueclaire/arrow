@@ -2594,7 +2594,7 @@ class DeltaBitPack4BitMapEncoder : public EncoderImpl, virtual public TypedEncod
   // Maximum possible header size
   static constexpr uint32_t kMaxPageHeaderWriterSize = 32;
   static constexpr uint32_t kValuesPerBlock =
-      std::is_same_v<int32_t, typename DType::c_type> ? 128 : 256;
+      std::is_same_v<int32_t, typename DType::c_type> ? 1024 : 2048;
   static constexpr uint32_t kMiniBlocksPerBlock = 4;
 
  public:
@@ -2680,7 +2680,7 @@ void DeltaBitPack4BitMapEncoder<DType>::Put(const T* src, int num_values) {
   // If we are starting a new block, write the block header with first value, not min delta
   if (values_current_block_ == 0) {
     current_value_ = src[0];
-    std::cout << "put first value: " << current_value_ << std::endl;
+    // std::cout << "put first value: " << current_value_ << std::endl;
     first_value_current_block_ = current_value_;
     idx = 1;
   }
@@ -2691,7 +2691,7 @@ void DeltaBitPack4BitMapEncoder<DType>::Put(const T* src, int num_values) {
     // making subtraction operations well-defined and correct even in case of overflow.
     // Encoded integers will wrap back around on decoding.
     // See http://en.wikipedia.org/wiki/Modular_arithmetic#Integers_modulo_n
-    std::cout << "put value: " << value << std::endl;
+    // std::cout << "put value: " << value << std::endl;
     deltas_[values_current_block_] = value - current_value_;
     current_value_ = value;
     idx++;
@@ -2733,8 +2733,8 @@ void DeltaBitPack4BitMapEncoder<DType>::FlushBlock() {
 
     // The minimum number of bits required to write any of values in deltas_ vector.
     // See overflow comment above.
-    const auto bit_width = bit_width_data[i] =
-        bit_util::Power2NumRequiredBits(max_delta);
+    const auto bit_width = bit_width_data[i] = 4;
+        // bit_util::Power2NumRequiredBits(max_delta);
 
     for (uint32_t j = start; j < start + values_current_mini_block; j++) {
       // See overflow comment above.
@@ -3056,7 +3056,7 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
         // Addition between min_delta, packed int and last_value should be treated as
         // unsigned addition. Overflow is as expected.
         last_value_ = static_cast<UT>(buffer[i + j]) + static_cast<UT>(last_value_);
-        std::cout << "last_value_ = " << last_value_ << std::endl;
+        // std::cout << "last_value_ = " << last_value_ << std::endl;
       }
       values_remaining_current_mini_block_ -= values_decode;
       i += values_decode;
@@ -3134,6 +3134,7 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
         current_value_ = first_value_in_block_;
         initialize_bit_map_first_time_ = false;
         values_remaining_current_mini_block_ -= 1;
+        i++;
       }
       int values_decode = std::min(values_remaining_current_mini_block_,
                                    static_cast<uint32_t>(max_values - i));

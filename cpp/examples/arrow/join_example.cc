@@ -47,9 +47,9 @@ namespace cp = arrow::compute;
 
 char kLeftRelationCsvData[] = R"csv(lkey,shared,ldistinct
 1,4,7
-2,5,8
+3,5,8
 11,20,21
-3,6,9)csv";
+2,6,9)csv";
 
 char kRightRelationCsvData[] = R"csv(rkey,shared,rdistinct
 1,10,13
@@ -107,6 +107,8 @@ arrow::Status DoHashJoin() {
   arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
                                               /*in_left_keys=*/{"lkey"},
                                               /*in_right_keys=*/{"rkey"},
+                                              {"lkey","shared","ldistinct"},
+                                              {"rkey"},
                                               /*filter*/ arrow::compute::literal(true),
                                               /*output_suffix_for_left*/ "_l",
                                               /*output_suffix_for_right*/ "_r"};
@@ -118,7 +120,7 @@ arrow::Status DoHashJoin() {
   ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Table> response_table,
                         arrow::acero::DeclarationToTable(std::move(hashjoin)));
 
-  std::cout << "Results : " << response_table->ToString() << std::endl;
+  std::cout << "Results : \n" << response_table->ToString() << std::endl;
 
   return arrow::Status::OK();
 }

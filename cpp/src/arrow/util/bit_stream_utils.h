@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <x86intrin.h>
+
 #include <iostream>
 #include <algorithm>
 #include <cstdint>
@@ -29,6 +31,8 @@
 #include "arrow/util/logging.h"
 #include "arrow/util/macros.h"
 #include "arrow/util/ubsan.h"
+
+typedef unsigned __int128 uint128_t;
 
 namespace arrow {
 namespace bit_util {
@@ -102,6 +106,68 @@ inline void unpack1_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   set_bit(bitmap, curr);
   curr += ((*in) >> 31); // d7
   set_bit(bitmap, curr);
+}
+
+inline void unpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+  curr += ((*in)) & 15; // d0
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 4) & 15; // d1
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 8) & 15; // d2
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 12) & 15; // d3
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 16) & 15; // d4
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 20) & 15; // d5
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 24) & 15; // d6
+  set_bit(bitmap, curr);
+  curr += ((*in) >> 28); // d7
+  set_bit(bitmap, curr);
+}
+
+inline void apply_packed_bitmap(uint64_t* bitmap, uint64_t& curr, uint64_t res) {
+  uint64_t index = curr >> 6;
+  uint64_t offset = curr & 63;
+  bitmap[index] |= (res << (offset + 1));
+  bitmap[index + 1] |= (res >> (63 - offset));
+  curr += 64 - __builtin_clzll(res);
+}
+
+// optimize by SIMD instructions
+const static __m128i m15 = _mm_set1_epi32(15U);
+const static __m128i m1 = _mm_set1_epi16(1U);
+
+void SIMDunpack4_8(const __m128i* in, uint64_t* bitmap, uint64_t& curr) {
+  // load: 128 bits = 4 * 32-bit int: d[31..24], d[23..16], d[15..8], d[7..0]
+  __m128i i = _mm_load_si128(in);
+  // shuffle: 128 bits = d[31, 30, 23, 22, 15, 14, 7, 6], d[29, 28, 21, 20, 13, 12, 5, 4], d[27, 26, 19, 18, 11, 10, 3, 2], d[25, 24, 17, 16, 9, 8, 1, 0]
+  __m128i a = _mm_shuffle_epi8(i, _mm_set_epi8(15, 11, 7, 3, 14, 10, 6, 2, 13, 9, 5, 1, 12, 8, 4, 0));
+  // unpack 4 bits [d6, d4, d2, d0]
+  __m128i d0 = _mm_and_si128(i, m15);
+  // unpack 4 bits [d7, d5, d3, d1]
+  __m128i d1 = _mm_and_si128(_mm_srli_epi32(a, 4), m15);
+  // delta = [d7, d6, d5, d4, d3, d2, d1, d0]
+  d0 = _mm_or_si128(d0, _mm_slli_epi32(d1, 4));
+  // generate delta bitmap = [b7, b6, b5, b4, b3, b2, b1, b0]
+  __m128i b0 = _mm_shl_epi16(m1, d0);
+  // generate mask = [m7, m6, m5, m4, m3, m2, m1, m0]
+  __m128i m = _mm_sub_epi16(_mm_slli_epi16(b0, 1), m1);
+  // extract low 64 bits of delta bitmap & mask to genearte packed bitmap
+  uint64_t res= _pext_u64(_mm_cvtsi128_si64(b0), _mm_cvtsi128_si64(m));
+  // apply packed bitmap to bitmap
+  apply_packed_bitmap(bitmap, curr, res);
+  // extract high 64 bits of delta bitmap & mask to genearte packed bitmap
+  res = _pext_u64(_mm_cvtsi128_si64(_mm_srli_epi64(b0, 64)), _mm_cvtsi128_si64(_mm_srli_epi64(m, 64)));
+  // apply packed bitmap to bitmap
+  apply_packed_bitmap(bitmap, curr, res);
+  // generate b1 for delta = [d15, d14, d13, d12, d11, d10, d9, d8]
+  // ...
+  // generate b2 for delta = [d23, d22, d21, d20, d19, d18, d17, d16]
+  // ...
+  // generate b3 for delta = [d31, d30, d29, d28, d27, d26, d25, d24]
+  // ...
 }
 
 /// Utility class to write bit/byte streams.  This class can write data to either be
@@ -402,6 +468,13 @@ inline void GetBitMap_(int num_bits, uint64_t* bit_map, uint64_t* curr, int max_
       }
       break;
     }
+    case 4: {
+      unpack4_8(&bits_1, bit_map, *curr);
+      if (bits_2) {
+        unpack4_8(&bits_2, bit_map, *curr);
+      }
+      break;
+    }
     default: {
       DCHECK(false) << "num_bits should be 1, 2 or 4, got " << num_bits;
     }
@@ -512,6 +585,7 @@ inline int BitReader::GetBatch(int num_bits, T* v, int batch_size) {
 inline int BitReader::GetBitMap(int num_bits, uint64_t* bit_map, uint64_t* curr, int batch_size) {
   DCHECK(buffer_ != NULL);
   DCHECK_LE(num_bits, 8) << "num_bits: " << num_bits;
+  std::cout << "Batch size=" << batch_size;
 
   int bit_offset = bit_offset_;
   int byte_offset = byte_offset_;
@@ -536,22 +610,51 @@ inline int BitReader::GetBitMap(int num_bits, uint64_t* bit_map, uint64_t* curr,
     i += unpack_size;
   }
 
-  int num_to_unpack = ((batch_size - i) * num_bits) / 32 * 32;
-  if (num_to_unpack > 0) {
-    int num_loops = num_to_unpack / 32;
+  int bit_num_to_unpack = ((batch_size - i) * num_bits) / 128 * 128;
+  if (bit_num_to_unpack > 0) {
+    int num_loops = bit_num_to_unpack / 128;
+    const uint128_t* start = reinterpret_cast<const uint128_t*>(buffer + byte_offset);
+    for (int k = 0; k < num_loops; k++) {
+      switch(num_bits) {
+      case 4:
+        SIMDunpack4_8(reinterpret_cast<const __m128i*>(start + k), bit_map, *curr);
+        break;
+      default:
+        DCHECK(false) << "num_bits should be 1, 2 or 4, got " << num_bits;
+      }
+    }
+    i += bit_num_to_unpack / num_bits;
+    std::cout << "unpack size from buffer: " << bit_num_to_unpack / num_bits << std::endl;
+    byte_offset += num_loops * 16;
+  } else {
+
+  bit_num_to_unpack = ((batch_size - i) * num_bits) / 32 * 32;
+  if (bit_num_to_unpack > 0) {
+    int num_loops = bit_num_to_unpack / 32;
     const uint32_t* start = reinterpret_cast<const uint32_t*>(buffer + byte_offset);
     for (int k = 0; k < num_loops; k++) {
-      unpack1_8(start + k, bit_map, *curr);
+      switch(num_bits) {
+      case 1:
+        unpack1_8(start + k, bit_map, *curr);
+        break;
+      case 4:
+        unpack4_8(start + k, bit_map, *curr);
+        break;
+      default:
+        DCHECK(false) << "num_bits should be 1, 2 or 4, got " << num_bits;
+      }
     }
-    i += num_to_unpack;
-    std::cout << "unpack size from buffer: " << num_to_unpack << std::endl;
+    i += bit_num_to_unpack / num_bits;
+    std::cout << "unpack size from buffer: " << bit_num_to_unpack / num_bits << std::endl;
     byte_offset += num_loops * 4;
+  }
   }
 
   detail::ResetBufferedValues_(buffer, byte_offset, max_bytes - byte_offset,
                                &buffered_values);
 
   DCHECK_LE(batch_size - i, (64 - bit_offset) / num_bits);
+  std::cout << "last unpack size: " << batch_size - i << std::endl;
   detail::GetBitMap_(num_bits, bit_map, curr, max_bytes, buffer, &bit_offset, &byte_offset,
         &buffered_values, batch_size - i);
 

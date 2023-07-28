@@ -28,13 +28,15 @@
 
 #include <iostream>
 
-#define BITMAP_SIZE 10
+#define BITMAP_SIZE 1050
 
 arrow::Result<std::shared_ptr<arrow::Table>> GetTable() {
   auto builder = arrow::Int64Builder();
 
   std::shared_ptr<arrow::Array> arr_x;
-  ARROW_RETURN_NOT_OK(builder.AppendValues({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+  for (int i = 0; i < 1050; ++i) {
+    ARROW_RETURN_NOT_OK(builder.Append(i));
+  }
   ARROW_RETURN_NOT_OK(builder.Finish(&arr_x));
 
   // std::shared_ptr<arrow::Array> arr_y;
@@ -69,7 +71,7 @@ arrow::Status WriteToFile(std::string path_to_file) {
 
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(*table.get(),
                                                  arrow::default_memory_pool(), outfile,
-                                                 /*chunk_size=*/3, props, arrow_props));
+                                                 /*chunk_size=*/128, props, arrow_props));
   return arrow::Status::OK();
 }
 
@@ -80,7 +82,7 @@ arrow::Status ReadBitMap(const std::string& path_to_file) {
   std::unique_ptr<parquet::ParquetFileReader> reader_ =
       parquet::ParquetFileReader::OpenFile(path_to_file);
   int64_t remain_offset = 4;
-  int64_t delta_length = 6;
+  int64_t delta_length = 140;
   auto file_metadata = reader_->metadata();
   int i = 0;
   std::cout << "num_row_groups: " << file_metadata->num_row_groups() << std::endl;
@@ -101,7 +103,7 @@ arrow::Status ReadBitMap(const std::string& path_to_file) {
   auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(0));
   std::cout << "remain_offset: " << remain_offset << std::endl;
   col_reader->Skip(remain_offset);
-  while (col_reader->HasNext()) {
+  while (col_reader->HasNext() && total_values_remaining > 0) {
     auto levels = col_reader->ReadBatch(total_values_remaining, bit_map.data(), &values_read);
     std::cout << "values_read: " << values_read << std::endl;
     total_values_remaining -= values_read;
@@ -110,7 +112,7 @@ arrow::Status ReadBitMap(const std::string& path_to_file) {
     col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(0));
     while (col_reader->HasNext() && total_values_remaining > 0) {
       auto levels = col_reader->ReadBatch(total_values_remaining, bit_map.data(), &values_read);
-      std::cout << "values_read: " << values_read << std::endl;
+      std::cout << "values_read: " << values_read << " total_values_remaining: " << total_values_remaining << std::endl;
       total_values_remaining -= values_read;
     }
   }
