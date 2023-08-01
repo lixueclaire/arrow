@@ -156,7 +156,8 @@ inline void SIMDunpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) 
   // low 64-bit = [d3, d2, d1, d0], high 64-bit = [d7, d6, d5, d4]
   __m128i d = _mm_set_epi64x(_pdep_u64(i, extract_mask), _pdep_u64((i >> 16), extract_mask));
   // generate delta bitmap = [b7, b6, b5, b4, b3, b2, b1, b0]
-  __m128i b = _mm_shl_epi16(m1, d);
+  // __m128i b = _mm_shl_epi16(m1, __mm_slli_epi16(d, 1));
+  __m128i b = m15;
   // generate mask = [m7, m6, m5, m4, m3, m2, m1, m0]
   __m128i m = _mm_sub_epi16(_mm_slli_epi16(b, 1), m1);
   // use low 64 bits of delta bitmap & mask to genearte packed bitmap
