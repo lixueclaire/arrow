@@ -36,6 +36,7 @@
 #include "arrow/util/bit_run_reader.h"
 #include "arrow/util/bit_stream_utils.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bpacking_bitmap.h"
 #include "arrow/util/bitmap_ops.h"
 #include "arrow/util/bitmap_writer.h"
 #include "arrow/util/byte_stream_split.h"
@@ -50,7 +51,6 @@
 #include "parquet/platform.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
-#include "parquet/encoding_util.h"
 
 namespace bit_util = arrow::bit_util;
 
@@ -2691,7 +2691,7 @@ void DeltaBitPack4BitMapEncoder<DType>::Put(const T* src, int num_values) {
     // making subtraction operations well-defined and correct even in case of overflow.
     // Encoded integers will wrap back around on decoding.
     // See http://en.wikipedia.org/wiki/Modular_arithmetic#Integers_modulo_n
-    // std::cout << "put value: " << value << std::endl;
+    // minor change: real delta - 1 to avoid more operations in simd decoding 
     deltas_[values_current_block_] = value - current_value_;
     current_value_ = value;
     idx++;
@@ -2733,8 +2733,8 @@ void DeltaBitPack4BitMapEncoder<DType>::FlushBlock() {
 
     // The minimum number of bits required to write any of values in deltas_ vector.
     // See overflow comment above.
-    const auto bit_width = bit_width_data[i] = 4;
-        // bit_util::Power2NumRequiredBits(max_delta);
+    const auto bit_width = bit_width_data[i] = 
+        bit_util::Power2NumRequiredBits(max_delta);
 
     for (uint32_t j = start; j < start + values_current_mini_block; j++) {
       // See overflow comment above.
@@ -3056,7 +3056,6 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
         // Addition between min_delta, packed int and last_value should be treated as
         // unsigned addition. Overflow is as expected.
         last_value_ = static_cast<UT>(buffer[i + j]) + static_cast<UT>(last_value_);
-        // std::cout << "last_value_ = " << last_value_ << std::endl;
       }
       values_remaining_current_mini_block_ -= values_decode;
       i += values_decode;
@@ -3085,8 +3084,7 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
     while (i < max_values) {
       if (ARROW_PREDICT_FALSE(values_remaining_current_mini_block_ == 0)) {
         if (ARROW_PREDICT_FALSE(!first_block_initialized_)) {
-          // buffer[i++] = last_value_;
-          i++;
+          ++i;
           DCHECK_EQ(i, 1);  // we're at the beginning of the page
           if (ARROW_PREDICT_FALSE(i == max_values)) {
             // When block is uninitialized and i reaches max_values we have two
@@ -3099,14 +3097,14 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
             if (total_value_count_ != 1) {
               InitBlock();
             }
-            set_bit(bit_map, last_value_);
+            ::arrow::plaint::set_bit(bit_map, last_value_);
             initialize_bit_map_first_time_ = false;
             current_value_ = last_value_;
             break;
           }
           InitBlock();
           // set bit to first value
-          set_bit(bit_map, first_value_in_block_);
+          ::arrow::plaint::set_bit(bit_map, first_value_in_block_);
           initialize_bit_map_first_time_ = false;
           current_value_ = first_value_in_block_;
         } else {
@@ -3115,26 +3113,26 @@ class DeltaBitPack4BitMapDecoder : public DecoderImpl, virtual public TypedDecod
             InitMiniBlock(delta_bit_widths_->data()[mini_block_idx_]);
           } else {
             InitBlock();
-            i++;  // the first value of block has fetched from header, not count in mini block.
+            ++i;  // the first value of block has fetched from header, not count in mini block.
             // set bit to first value
-            set_bit(bit_map, first_value_in_block_);
+            ::arrow::plaint::set_bit(bit_map, first_value_in_block_);
             initialize_bit_map_first_time_ = false;
             current_value_ = first_value_in_block_;
           }
         }
       }
 
-      if (initialize_bit_map_first_time_) {
+      if (ARROW_PREDICT_TRUE(initialize_bit_map_first_time_)) {
         uint32_t value;
         if (!decoder_->GetValue(delta_bit_width_, &value)) {
           ParquetException::EofException();
         }
         first_value_in_block_ = static_cast<UT>(value) + static_cast<UT>(last_value_);
-        set_bit(bit_map, first_value_in_block_);
+        ::arrow::plaint::set_bit(bit_map, first_value_in_block_);
         current_value_ = first_value_in_block_;
         initialize_bit_map_first_time_ = false;
         values_remaining_current_mini_block_ -= 1;
-        i++;
+        ++i;
       }
       int values_decode = std::min(values_remaining_current_mini_block_,
                                    static_cast<uint32_t>(max_values - i));
@@ -4001,8 +3999,10 @@ std::unique_ptr<Encoder> MakeEncoder(Type::type type_num, Encoding::type encodin
   } else if (encoding == Encoding::DELTA_BINARY_PACKED_FOR_BIT_MAP) {
     switch (type_num) {
       case Type::INT32:
+        std::cout << "DELTA_BINARY_PACKED_FOR_BIT_MAP" << std::endl;
         return std::make_unique<DeltaBitPack4BitMapEncoder<Int32Type>>(descr, pool);
       case Type::INT64:
+        std::cout << "DELTA_BINARY_PACKED_FOR_BIT_MAP INT64" << std::endl;
         return std::make_unique<DeltaBitPack4BitMapEncoder<Int64Type>>(descr, pool);
       default:
         throw ParquetException(

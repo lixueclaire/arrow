@@ -279,7 +279,7 @@ class TypedDecoder : virtual public Decoder {
   virtual int Decode(T* buffer, int max_values) = 0;
 
   virtual int DecodeBitMap(uint64_t* bitmap, int max_values) {
-    throw ParquetException("DecodeDecodeBitMap not implemented");
+    throw ParquetException("DecodeBitMap not implemented");
 
   }
 
