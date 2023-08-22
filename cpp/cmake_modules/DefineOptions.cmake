@@ -235,7 +235,7 @@ takes precedence over ccache if a storage backend is configured" ON)
                 "Build benchmarks that do a longer exploration of performance" OFF)
 
   if(ARROW_BUILD_SHARED)
-    set(ARROW_TEST_LINKAGE_DEFAULT "shared")
+    set(ARROW_TEST_LINKAGE_DEFAULT "static")
   else()
     set(ARROW_TEST_LINKAGE_DEFAULT "static")
   endif()

@@ -27,7 +27,7 @@ inline void set_bit(uint64_t* bitmap, uint64_t curr) {
     bitmap[curr >> 6] |= (1ULL << (curr & 0x3f));
 }
 
-inline void unpack1_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack1(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   curr += ((*in)) & 1; // d0
   set_bit(bitmap, curr);
   curr += ((*in) >> 1) & 1; // d1
@@ -94,7 +94,7 @@ inline void unpack1_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   set_bit(bitmap, curr);
 }
 
-inline void unpack2_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack2(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     curr += (*in) & 3; // d0
     set_bit(bitmap, curr);
     curr += (*in >> 2) & 3; // d1
@@ -129,7 +129,7 @@ inline void unpack2_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     set_bit(bitmap, curr);
 }
 
-inline void unpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack4(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     curr += (*in) & 15; // d0
     set_bit(bitmap, curr);
     curr += (*in >> 4) & 15; // d1
@@ -148,7 +148,7 @@ inline void unpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     set_bit(bitmap, curr);
 }
 
-inline void unpack8_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     curr += (*in) & 255; // d0
     set_bit(bitmap, curr);
     curr += (*in >> 8) & 255; // d1
@@ -157,6 +157,23 @@ inline void unpack8_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
     set_bit(bitmap, curr);
     curr += (*in >> 24); // d3
     set_bit(bitmap, curr);
+}
+
+inline void unpack16(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+  curr += (*in) & 65535; // d0
+  set_bit(bitmap, curr);
+  curr += (*in >> 16); // d1
+  set_bit(bitmap, curr);
+}
+
+inline void unpack32(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+  curr += (*in); // d0
+  set_bit(bitmap, curr);
+}
+
+inline void unpack64(const uint64_t* in, uint64_t* bitmap, uint64_t& curr) {
+  curr += (*in); // d0
+  set_bit(bitmap, curr);
 }
 
 }  // namespace plaint
@@ -181,13 +198,13 @@ inline void apply_packed_bitmap(uint64_t* bitmap, uint64_t& curr, uint64_t& res)
   curr += 64 - __builtin_clzll(res); // update the highest 1 in bitmap
 }
 
-inline void unpack1_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack1(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   // apply packed bitmap to bitmap
   uint64_t res = static_cast<uint64_t>(*in);
   apply_packed_bitmap(bitmap, curr, res);
 }
 
-inline void unpack2_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack2(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   uint16_t low_i = static_cast<uint16_t>(*in);
   __m128i b = _mm_set_epi16(1 << ((low_i >> 14) - 1), 1 << (((low_i >> 12) & 3) - 1), 1 << (((low_i >> 10) & 3) - 1),
       1 << (((low_i >> 8) & 3) - 1), 1 << (((low_i >> 6) & 3) - 1), 1 << (((low_i >> 4) & 3) - 1), 1 << (((low_i >> 2) & 3) - 1),
@@ -224,7 +241,7 @@ inline void unpack2_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
 /// @param in a 8 * 4-bit delta value
 /// @param bitmap the result bitmap
 /// @param curr the highest 1 in bitmap
-inline void unpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack4(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   uint32_t i = *in;
   __m128i b = _mm_set_epi16(1 << ((i >> 28) - 1), 1 << (((i >> 24) & 15) - 1), 1 << (((i >> 20) & 15) - 1),
       1 << (((i >> 16) & 15) - 1), 1 << (((i >> 12) & 15) - 1), 1 << (((i >> 8) & 15) - 1), 1 << (((i >> 4) & 15) - 1),
@@ -246,7 +263,7 @@ inline void unpack4_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
 /// @param in a 8 * 4-bit delta value
 /// @param bitmap the result bitmap
 /// @param curr the highest 1 in bitmap
-inline void unpack8_8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
+inline void unpack8(const uint32_t* in, uint64_t* bitmap, uint64_t& curr) {
   uint32_t i = *in;
   __m128i b = _mm_set_epi32(1 << ((i >> 24) - 1), 1 << (((i >> 16) & 255) - 1), 1 << (((i >> 8) & 255) - 1),
       1 << ((i & 255) - 1));

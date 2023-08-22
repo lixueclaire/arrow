@@ -880,7 +880,7 @@ pass ARROW_BUILD_SHARED=on")
   endif()
   # Use shared linking for unit tests if it's available
   set(ARROW_TEST_LINK_LIBS ${ARROW_TEST_SHARED_LINK_LIBS})
-  set(ARROW_EXAMPLE_LINK_LIBS arrow_shared)
+  set(ARROW_EXAMPLE_LINK_LIBS arrow_static)
 else()
   if(ARROW_BUILD_TESTS AND NOT ARROW_BUILD_STATIC)
     message(FATAL_ERROR "If using static linkage for unit tests, must also \
