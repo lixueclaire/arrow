@@ -671,6 +671,14 @@ class ColumnReaderImplBase {
     return num_decoded;
   }
 
+  // ReadValues for labels in GraphAr
+  int64_t ReadValues(int64_t batch_size, int32_t* repeated_nums, bool* repeated_values,
+                     int32_t& length) {
+    int64_t num_decoded = current_decoder_->Decode(repeated_nums, repeated_values, length,
+                                                   static_cast<int>(batch_size));
+    return num_decoded;
+  }
+
   // Read up to batch_size values from the current data page into the
   // pre-allocated memory T*, leaving spaces for null entries according
   // to the def_levels.
@@ -1011,6 +1019,11 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 
   int64_t ReadBatch(int64_t batch_size, uint64_t* bit_map, int64_t* values_read) override;
 
+  // ReadBatch for labels in GraphAr
+  // def_levels = nullptr and rep_levels = nullptr
+  int64_t ReadBatch(int64_t batch_size, int32_t* repeated_nums, bool* repeated_values,
+                    int32_t& length, int64_t* values_read) override;
+
   int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
                           int64_t* levels_read, int64_t* values_read,
@@ -1164,6 +1177,35 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def
     ss << "Read 0 values, expected " << expected_values;
     ParquetException::EofException(ss.str());
   }
+  this->ConsumeBufferedValues(total_values);
+
+  return total_values;
+}
+
+// ReadBatch for labels in GraphAr
+template <typename DType>
+int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size,
+                                                int32_t* repeated_nums,
+                                                bool* repeated_values, int32_t& length,
+                                                int64_t* values_read) {
+  // HasNext invokes ReadNewPage
+  if (!HasNext()) {
+    *values_read = 0;
+    return 0;
+  }
+  int64_t num_def_levels = 0;
+  int64_t values_to_read = 0;
+  ReadLevels(batch_size, nullptr, nullptr, &num_def_levels, &values_to_read);
+
+  *values_read = this->ReadValues(values_to_read, repeated_nums, repeated_values, length);
+  int64_t total_values = std::max<int64_t>(num_def_levels, *values_read);
+  /* int64_t expected_values =
+      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  if (total_values == 0 && expected_values > 0) {
+    std::stringstream ss;
+    ss << "Read 0 values, expected " << expected_values;
+    ParquetException::EofException(ss.str());
+  } */
   this->ConsumeBufferedValues(total_values);
 
   return total_values;

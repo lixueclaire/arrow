@@ -221,6 +221,16 @@ class TypedColumnReader : public ColumnReader {
 
   virtual int64_t ReadBatch(int64_t batch_size, uint64_t* bit_map, int64_t* values_read) = 0;
 
+  // ReadBatch for labels in GraphAr
+  virtual int64_t ReadBatch(int64_t batch_size, int32_t* repeated_nums,
+                            bool* repeated_values, int32_t& length,
+                            int64_t* values_read) {
+    /// ！！！ not implemented
+    throw ParquetException(
+        "ReadBatch() for GraphAr labels is not implemented in TypedColumnReader!");
+    return 0;
+  }
+
   /// Read a batch of repetition levels, definition levels, and values from the
   /// column and leave spaces for null entries on the lowest level in the values
   /// buffer.

@@ -280,7 +280,15 @@ class TypedDecoder : virtual public Decoder {
 
   virtual int DecodeBitMap(uint64_t* bitmap, int max_values) {
     throw ParquetException("DecodeBitMap not implemented");
+  }
 
+  /// Decode labels in GraphAr
+  virtual int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& length,
+                     int max_values) {
+    /// ！！！ not implemented
+    throw ParquetException(
+        "Decode() for GraphAr labels is not implemented in TypedDecoder!");
+    return 0;
   }
 
   /// \brief Decode the values in this data page but leave spaces for null entries.
@@ -410,6 +418,15 @@ class BooleanDecoder : virtual public TypedDecoder<BooleanType> {
   /// \return The number of values decoded. Should be identical to max_values except
   /// at the end of the current data page.
   virtual int Decode(uint8_t* buffer, int max_values) = 0;
+
+  /// Decode labels in GraphAr
+  virtual int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& length,
+                     int max_values) override {
+    /// ！！！ not implemented
+    throw ParquetException(
+        "Decode() for GraphAr labels is not implemented in BooleanDecoder!");
+    return 0;
+  }
 };
 
 class FLBADecoder : virtual public TypedDecoder<FLBAType> {
