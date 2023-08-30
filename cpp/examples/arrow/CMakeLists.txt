@@ -163,6 +163,8 @@ if(ARROW_PARQUET AND ARROW_DATASET)
 
   add_arrow_example(data_generator EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
   add_arrow_example(data_generator_label EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
+  add_arrow_example(run_work_load EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
+  add_arrow_example(run_intersection EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
 
   if(ARROW_CSV)
     add_arrow_example(join_example EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})

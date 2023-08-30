@@ -12,6 +12,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+#include <time.h>
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -442,7 +444,7 @@ int main (int argc, char* argv[]) {
   int32_t ignore_line_num = std::stoi(argv[9]);
   std::shared_ptr<arrow::Table> edge_table;
   if (is_reverse) {
-    edge_table = read_csv_to_arrow_table(edge_source_file, is_weighted, delemiter, ignore_line_num)->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();;
+    edge_table = read_csv_to_arrow_table(edge_source_file, is_weighted, delemiter, ignore_line_num)->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();
   } else {
     edge_table = read_csv_to_arrow_table(edge_source_file, is_weighted, delemiter, ignore_line_num)->SelectColumns({0, 1}).ValueOrDie();
   }
@@ -453,16 +455,25 @@ int main (int argc, char* argv[]) {
     edge_table = convert_to_undirected(edge_table);
   }
   if (!is_sorted) {
+    auto run_start = clock();
     edge_table = SortKeys(edge_table);
+    auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+    std::cout << "sort time: " << run_time << "ms" << std::endl;
   }
   // auto print_table = table->Slice(312074, 8765);
   // auto print_table = table->SelectColumns({1}).ValueOrDie()->Slice(0, 312075);;
   // std::cout << "table: " << print_table->ToString() << std::endl;
   // writeToCsv(print_table, "test.csv");
   // return 0;
-  DCHECK_OK(WriteToFile(edge_table, path_to_file + "-2-delta"));
-  DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file + "-base"));
+  // DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file + "-base"));
+  auto run_start = clock();
   auto offset = getOffsetTable(edge_table, kSrcIndexCol, vertex_num);
+  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "offset time: " << run_time << "ms" << std::endl;
+  run_start = clock();
+  DCHECK_OK(WriteToFile(edge_table, path_to_file + "-2-delta"));
   DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
+  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "write time: " << run_time << "ms" << std::endl;
   return 0;
 }

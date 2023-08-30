@@ -675,6 +675,7 @@ inline bool RleEncoder::Put(uint64_t value) {
   DCHECK(bit_width_ == 64 || value < (1ULL << bit_width_));
   if (ARROW_PREDICT_FALSE(buffer_full_)) return false;
 
+  /* [GraphAR]: always literal run. */
   if (ARROW_PREDICT_TRUE(current_value_ == value)) {
     ++repeat_count_;
     if (repeat_count_ > 8) {

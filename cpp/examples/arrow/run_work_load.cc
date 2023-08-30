@@ -28,6 +28,13 @@
 #include "parquet/file_writer.h"
 #include "parquet/metadata.h"
 
+#include "arrow/acero/exec_plan.h"
+#include "arrow/compute/api.h"
+#include "arrow/compute/expression.h"
+#include "arrow/dataset/dataset.h"
+#include "arrow/dataset/plan.h"
+#include "arrow/dataset/scanner.h"
+
 #include <iostream>
 #include <cstdlib>
 
@@ -69,32 +76,72 @@ arrow::Result<std::shared_ptr<arrow::Table>> GetTable() {
   return arrow::Table::Make(schema, {arr_src});
 }
 
-arrow::Status WriteToFile(std::string path_to_file) {
-  // #include "parquet/arrow/writer.h"
-  // #include "arrow/util/type_fwd.h"
-  using parquet::ArrowWriterProperties;
-  using parquet::WriterProperties;
+std::shared_ptr<arrow::Table> DoHashJoin(
+    const std::shared_ptr<arrow::Table>& l_table,
+    const std::shared_ptr<arrow::Table>& r_table,
+    const std::string& l_key, const std::string& r_key, const std::string& project_name) {
+  auto l_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(l_table));
+  auto r_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(r_table));
 
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<arrow::Table> table, GetTable());
+  arrow::dataset::internal::Initialize();
+  auto l_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  l_options->projection = arrow::compute::project({}, {});
 
-  // Choose compression
-  std::shared_ptr<WriterProperties> props =
-       WriterProperties::Builder().disable_dictionary()->compression(parquet::Compression::UNCOMPRESSED)->encoding(parquet::Encoding::DELTA_BINARY_PACKED_FOR_BIT_MAP)->build();
-  // std::shared_ptr<WriterProperties> props =
-  //     WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
+  auto r_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  r_options->projection = arrow::compute::project({}, {});
 
-  // Opt to store Arrow schema for easier reads back into Arrow
-  std::shared_ptr<ArrowWriterProperties> arrow_props =
-      ArrowWriterProperties::Builder().build();
+  auto r_schema = r_dataset->schema();
+  std::vector<arrow::FieldRef> r_output_fields({project_name});
 
-  std::shared_ptr<arrow::io::FileOutputStream> outfile;
-  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(path_to_file));
+  // construct the scan node
+  auto l_scan_node_options = arrow::dataset::ScanNodeOptions{l_dataset, l_options};
+  auto r_scan_node_options = arrow::dataset::ScanNodeOptions{r_dataset, r_options};
 
-  ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(*table.get(),
-                                                 arrow::default_memory_pool(), outfile,
-                                                 // /*chunk_size=*/64 * 1024 * 1024, props, arrow_props));
-                                                 /*chunk_size=*/128, props, arrow_props));
-  return arrow::Status::OK();
+  arrow::acero::Declaration left{"scan", std::move(l_scan_node_options)};
+  arrow::acero::Declaration right{"scan", std::move(r_scan_node_options)};
+
+  arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
+                                              /*in_left_keys=*/{l_key},
+                                              /*in_right_keys=*/{r_key},
+                                              {},
+                                              r_output_fields,
+                                              /*filter*/ arrow::compute::literal(true),
+                                              /*output_suffix_for_left*/ "_l",
+                                              /*output_suffix_for_right*/ "_r"};
+  arrow::acero::Declaration hashjoin{
+      "hashjoin", {std::move(left), std::move(right)}, join_opts};
+
+  // expected columns l_a, l_b
+  std::shared_ptr<arrow::Table> response_table = arrow::acero::DeclarationToTable(std::move(hashjoin)).ValueOrDie();
+  return response_table;
+}
+
+void Project(std::shared_ptr<arrow::Table> left_table, const std::string& vertex_file, const std::string& project_name, std::shared_ptr<arrow::Table>& result_table) {
+  arrow::MemoryPool* pool = arrow::default_memory_pool();
+  std::shared_ptr<arrow::io::RandomAccessFile> input;
+  input = arrow::io::ReadableFile::Open(vertex_file).ValueOrDie();
+
+  // Open Parquet file reader
+  std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
+  auto status = parquet::arrow::OpenFile(input, pool, &arrow_reader);
+  if (!status.ok()) {
+    std::cerr << "Parquet read error: " << status.message() << std::endl;
+    return;
+  }
+
+  // Read entire file as a single Arrow table
+  std::shared_ptr<arrow::Table> r_table;
+  status = arrow_reader->ReadTable(&r_table);
+  if (!status.ok()) {
+    std::cerr << "Table read error: " << status.message() << std::endl;
+    return;
+  }
+  result_table = DoHashJoin(left_table, r_table, "index", "_graphArSrcIndex", project_name);
+  return;
 }
 
 void getOffset(const std::string& path_to_offset_file, const int64_t& vertex_id, int64_t& offset, int64_t& length) {
@@ -221,66 +268,65 @@ void ReadBitMapBaseLine(const std::string& path_to_file, const int64_t& offset, 
   return;
 }
 
-void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id, uint64_t* bit_map) {
+arrow::Result<std::shared_ptr<arrow::Table>> ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id) {
   arrow::MemoryPool* pool = arrow::default_memory_pool();
   std::shared_ptr<arrow::io::RandomAccessFile> input;
   input = arrow::io::ReadableFile::Open(path_to_file).ValueOrDie();
 
   // Open Parquet file reader
   std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
-  auto status = parquet::arrow::OpenFile(input, pool, &arrow_reader);
-  if (!status.ok()) {
-    std::cerr << "Parquet read error: " << status.message() << std::endl;
-    return;
-  }
+  ARROW_RETURN_NOT_OK(parquet::arrow::OpenFile(input, pool, &arrow_reader));
 
   // Read entire file as a single Arrow table
   std::shared_ptr<arrow::Table> table;
-  status = arrow_reader->ReadTable(&table);
-  if (!status.ok()) {
-    std::cerr << "Table read error: " << status.message() << std::endl;
-    return;
-  }
+  ARROW_RETURN_NOT_OK(arrow_reader->ReadTable(&table));
 
   // flatten the arrow table
   auto flatten_table = table->CombineChunks(pool).ValueOrDie();
   auto src_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(0)->chunk(0));
   auto dst_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(1)->chunk(0));
+  auto builder = arrow::Int64Builder();
+  std::shared_ptr<arrow::Array> array;
   for (int64_t i = 0; i < src_array->length(); ++i) {
-    // if (src_array->Value(i) == 10010) {
     if (src_array->Value(i) == vertex_id) {
-      set_bit(bit_map, dst_array->Value(i));
+      ARROW_RETURN_NOT_OK(builder.Append(dst_array->Value(i)));
     }
   }
+  ARROW_RETURN_NOT_OK(builder.Finish(&array));
+  auto schema = arrow::schema(
+    // {arrow::field("x", arrow::int64()), arrow::field("y", arrow::int32())});
+    {arrow::field("index", arrow::int64())});
+  return arrow::Table::Make(schema, {array});
 }
 
 void RealWoldWorkLoad(const std::string& path_to_file, uint64_t* bit_map) {
   std::unique_ptr<parquet::ParquetFileReader> reader_ =
       parquet::ParquetFileReader::OpenFile(path_to_file);
   auto file_metadata = reader_->metadata();
+  std::cout << "num_row: " << file_metadata->num_rows() << std::endl;
   int64_t index = 0;
+  int64_t count = 0;
   for (int64_t rg_i = 0; rg_i < file_metadata->num_row_groups(); ++rg_i) {
-    auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(rg_i)->Column(0));
+    auto id_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(rg_i)->Column(1));
+    // auto content_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(rg_i)->Column(5));
     auto row_group_metadata = file_metadata->RowGroup(rg_i);
     int64_t last_row_i = 0;
     for (int64_t row_i = 0; row_i < row_group_metadata->num_rows(); row_i++) {
       if ((bit_map[index >> 6] & (1UL << (index & 63)))) {
-        std::cout << "index: " << index << std::endl;
-        col_reader->Skip(row_i - last_row_i);
-        std::cout << "skip done" << std::endl;
+        id_reader->Skip(row_i - last_row_i);
         int64_t value = 0;
         int64_t value_read = 0;
-        col_reader->ReadBatch(1, nullptr, nullptr, &value, &value_read);
-        std::cout << "value: " << value << std::endl;
+        id_reader->ReadBatch(1, nullptr, nullptr, &value, &value_read);
         last_row_i = row_i + 1;
+        count++;
       }
       index++;
     }
   }
+  std::cout << "count: " << count << " index=" << index << std::endl;
 }
 
-void RunExamples(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
-  // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
+void RunExamples(const std::string& path_to_file, const std::string& vertex_path_to_file, int64_t vertex_num, int64_t vertex_id) {
   std::string path = path_to_file + "-delta";
   uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
   memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
@@ -289,10 +335,6 @@ void RunExamples(const std::string& path_to_file, int64_t vertex_num, int64_t ve
   std::cout << "offset: " << offset << ", length: " << length << std::endl;
   auto run_start = clock();
   ReadBitMap(path, offset, length, bit_map);
-  std::cout << "ReadBitMap done" << std::endl;
-  RealWoldWorkLoad("/mnt/ldbc/ldbc-sf10/person_0_0.csv.parquet", bit_map);
-
-  return;
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "First run time: " << run_time << " ms" << std::endl;
   run_start = clock();
@@ -305,6 +347,21 @@ void RunExamples(const std::string& path_to_file, int64_t vertex_num, int64_t ve
   ReadBitMap(path, offset, length, bit_map);
   auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "Average run time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
+
+  run_start = clock();
+  RealWoldWorkLoad(vertex_path_to_file, bit_map);
+  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "First project time: " << run_time << " ms" << std::endl;
+  run_start = clock();
+  RealWoldWorkLoad(vertex_path_to_file, bit_map);
+  run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  run_start = clock();
+  RealWoldWorkLoad(vertex_path_to_file, bit_map);
+  run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  run_start = clock();
+  RealWoldWorkLoad(vertex_path_to_file, bit_map);
+  run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "Average project time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
   delete[] bit_map;
   // return;
 }
@@ -335,41 +392,41 @@ void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, in
   return;
 }
 
-void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
-  // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
+void RunExamplesBaseLineNoOffset(const std::string& path_to_file, const std::string& vertex_path_to_file, int64_t vertex_num, int64_t vertex_id) {
   std::string path = path_to_file + "-base";
-  uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
-  memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
+  std::shared_ptr<arrow::Table> table;
   auto run_start = clock();
-  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run time: " << run_time << " ms" << std::endl;
+  std::cout << "First run get bit map time: " << run_time << " ms" << std::endl;
   run_start = clock();
-  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();
-  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
   auto run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();
-  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
   auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average run time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
-  delete[] bit_map;
+  std::cout << "Average run get bit map time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
+  std::shared_ptr<arrow::Table> result_table;
+  run_start = clock();
+  Project(table, vertex_path_to_file, "id", result_table);
+  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "First run project time: " << run_time << " ms" << std::endl;
+  run_start = clock();
+  Project(table, vertex_path_to_file, "id", result_table);
+  run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  run_start = clock();
+  Project(table, vertex_path_to_file, "id", result_table);
+  run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  run_start = clock();
+  Project(table, vertex_path_to_file, "id", result_table);
+  run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "Average run project time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
+  std::cout << "result_table->num_rows(): " << result_table->num_rows() << std::endl;
   return;
 } 
-
-void CheckCorretness(const std::string& path_to_file, int32_t vertex_num, int64_t vertex_id) {
-  uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
-  memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
-  int64_t offset = 0, length = 0;
-  getOffset(path_to_file + "-offset", vertex_id, offset, length);
-  std::cout << "offset: " << offset << " length: " << length << std::endl;
-  ReadBitMap(path_to_file + "-delta", offset, length, bit_map);
-  ReadBitMapBaseLine(path_to_file + "-base", offset, length, bit_map);
-  // ReadBitMapBaseLineNoOffset(path_to_file + "-base", vertex_id, bit_map);
-  delete[] bit_map;
-  return;
-}
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -378,20 +435,17 @@ int main(int argc, char** argv) {
   }
 
   std::string path_to_file = argv[1];
-  int64_t vertex_num = std::stol(argv[2]);
-  int64_t vertex_id = std::stol(argv[3]);
+  std::string vertex_path_file = argv[2];
+  int64_t vertex_num = std::stol(argv[3]);
+  int64_t vertex_id = std::stol(argv[4]);
   std::cout << "path_to_file: " << path_to_file << " vertex_num: " << vertex_num << " vertex_id: " << vertex_id << std::endl;
   // CheckCorretness(path_to_file, vertex_num, vertex_id);
   // return 0;
-  if (argc > 4) {
-    std::string type = argv[4];  
-    if (type == "delta") {
-      RunExamples(path_to_file, vertex_num, vertex_id);
-    } else {
-      RunExamplesBaseLine(path_to_file, vertex_num, vertex_id);
-    }
+  std::string type = argv[5];  
+  if (type == "delta") {
+    RunExamples(path_to_file, vertex_path_file, vertex_num, vertex_id);
   } else {
-    RunExamplesBaseLineNoOffset(path_to_file, vertex_num, vertex_id);
+    RunExamplesBaseLineNoOffset(path_to_file, vertex_path_file, vertex_num, vertex_id);
   }
 
   // if (!status.ok()) {

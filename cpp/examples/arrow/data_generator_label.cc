@@ -68,6 +68,32 @@ std::shared_ptr<arrow::Table> ExecutePlanAndCollectAsTable(
   return response_table;
 }
 
+arrow::Status WriteToParquet(std::shared_ptr<arrow::Table> table,
+                          const std::string& path_to_file) {
+  // #include "parquet/arrow/writer.h"
+  // #include "arrow/util/type_fwd.h"
+  using parquet::ArrowWriterProperties;
+  using parquet::WriterProperties;
+
+  // Choose compression
+  std::shared_ptr<WriterProperties> props =
+        WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
+  // std::shared_ptr<WriterProperties> props =
+  //     WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
+
+  // Opt to store Arrow schema for easier reads back into Arrow
+  std::shared_ptr<ArrowWriterProperties> arrow_props =
+      ArrowWriterProperties::Builder().build();
+
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(path_to_file));
+
+  ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(*table.get(),
+                                                 arrow::default_memory_pool(), outfile,
+                                                 /*chunk_size=*/1024 * 1024, props, arrow_props));
+  return arrow::Status::OK();
+}
+
 std::shared_ptr<arrow::Table> read_csv_to_arrow_table(
     const std::string& csv_file, bool is_weighted, std::string& delemiter, int ignore_rows = 0) {
   arrow::io::IOContext io_context = arrow::io::default_io_context();
@@ -94,7 +120,7 @@ std::shared_ptr<arrow::Table> read_csv_to_arrow_table(
   } else {
     read_options.column_names = {"src", "dst"};
   }
-  // read_options.skip_rows = 2;
+  read_options.column_names = {"src", "dst", "weight"};
 
   // Instantiate TableReader from input stream and options
   auto maybe_reader = arrow::csv::TableReader::Make(
@@ -139,6 +165,7 @@ std::shared_ptr<arrow::Table> read_vertex_csv_to_arrow_table(
   // Read table from CSV file
   auto maybe_table = reader->Read();
   std::shared_ptr<arrow::Table> table = *maybe_table;
+  // DCHECK_OK(WriteToParquet(table, csv_file + ".parquet"));
   return table;
 }
 
@@ -392,7 +419,6 @@ std::shared_ptr<arrow::Table> getOffsetTable(
   return arrow::Table::Make(schema, arrays);
 }
 
-
 void write_to_graphar(
     const std::string& path_to_file,
     const std::string& src_vertex_source_file,
@@ -400,41 +426,51 @@ void write_to_graphar(
     const std::string& dst_vertex_source_file) {
     // read vertex source to arrow table
     std::string delemiter = "|";
-    auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
+    // read vertex source to arrow table
+    auto dst_vertex_table = read_vertex_csv_to_arrow_table(dst_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
     auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 1)->SelectColumns({0, 1}).ValueOrDie();
-    auto src_vertex_table_with_index = add_index_column(src_vertex_table, true);
-    // writeToCsv(src_vertex_table_with_index, path_to_file + "-v");
-    src_vertex_table.reset();
+    auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
+    auto run_start = clock();
+    auto dst_vertex_table_with_index = add_index_column(dst_vertex_table, false);
+    int64_t vertex_num = dst_vertex_table_with_index->num_rows();
+    dst_vertex_table.reset();
     // auto& vertex_info = graph_info.GetVertexInfo(vertex_label).value();
-    auto edge_table_with_src_index = DoHashJoin(src_vertex_table_with_index, edge_table, kSrcIndexCol, "src");
+    auto edge_table_with_dst_index = DoHashJoin(dst_vertex_table_with_index, edge_table, kDstIndexCol, "dst");
     edge_table.reset();
-    std::shared_ptr<arrow::Table> dst_vertex_table_with_index;
-    if (false) {
+    std::shared_ptr<arrow::Table> src_vertex_table_with_index;
+    if (src_vertex_source_file == dst_vertex_source_file) {
       // rename the column name
-      auto old_schema = src_vertex_table_with_index->schema();
+      auto old_schema = dst_vertex_table_with_index->schema();
       std::vector<std::string> new_names;
       for (int i = 0; i < old_schema->num_fields(); i++) {
-        if (old_schema->field(i)->name() == kSrcIndexCol) {
+        if (old_schema->field(i)->name() == kDstIndexCol) {
           // Create a new field with the new name and the same data type as the old field
-          new_names.push_back(kDstIndexCol);
+          new_names.push_back(kSrcIndexCol);
         } else {
           // Copy over the old field
           new_names.push_back(old_schema->field(i)->name());
         }
       }
-      dst_vertex_table_with_index = src_vertex_table_with_index->RenameColumns(new_names).ValueOrDie();
+      src_vertex_table_with_index = dst_vertex_table_with_index->RenameColumns(new_names).ValueOrDie();
     } else {
-      auto dst_vertex_table = read_vertex_csv_to_arrow_table(dst_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
-      dst_vertex_table_with_index = add_index_column(dst_vertex_table, false);
+      auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
+      src_vertex_table_with_index = add_index_column(src_vertex_table, true);
     }
-    src_vertex_table_with_index.reset();
-    auto edge_table_with_src_dst_index = DoHashJoin(dst_vertex_table_with_index, edge_table_with_src_index, kDstIndexCol, "dst");
-    writeToCsv(edge_table_with_src_dst_index, path_to_file + "-unsorted");
-    // auto table = SortKeys(edge_table_with_src_dst_index)->SelectColumns({1, 0}).ValueOrDie();
+    // DCHECK_OK(WriteToParquet(src_vertex_table_with_index, path_to_file + "-vertex"));
+    dst_vertex_table_with_index.reset();
+    // auto edge_table_with_src_dst_index = DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, kSrcIndexCol, "src")->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();;
+    auto edge_table_with_src_dst_index = DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, kSrcIndexCol, "src");
+    edge_table_with_src_dst_index = convert_to_undirected(edge_table_with_src_dst_index);
 
-    // writeToCsv(table, path_to_file);
-    // auto offset = getOffsetTable(edge_table_with_src_dst_index, kSrcIndexCol, src_vertex_table_with_index->num_rows());
-    // DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
+    auto table = SortKeys(edge_table_with_src_dst_index);
+    edge_table_with_src_dst_index.reset();
+
+    DCHECK_OK(WriteToFile(table, path_to_file + "-delta"));
+    DCHECK_OK(WriteToFileBaseLine(table, path_to_file+"-base"));
+    // writeToCsv(table, path_to_file + ".csv");
+    auto offset = getOffsetTable(table, kSrcIndexCol, vertex_num);
+    table.reset();
+    DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
 
     return;
 }
