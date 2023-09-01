@@ -349,7 +349,7 @@ int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, const std::string& p
   std::vector<std::string> _first_name;
   std::vector<std::string> _last_name;
 
-  int index = 0, index2 = 0, index3 = 0, count = 0;  
+  int index = 0, count = 0;  
   std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
       parquet::ParquetFileReader::OpenFile(path_to_table, false);
   // Get the File MetaData
@@ -358,9 +358,10 @@ int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, const std::string& p
   int num_columns = file_metadata->num_columns();
 
   // char* char_buffer = new char[total_length];
-  int64_t *values = new int64_t[BATCH_SIZE];
-  parquet::ByteArray* byte_values = new parquet::ByteArray[BATCH_SIZE];
-  memset(values, 0, sizeof(int64_t) * BATCH_SIZE);
+  // int64_t *values = new int64_t[BATCH_SIZE];
+  // parquet::ByteArray* byte_values = new parquet::ByteArray[BATCH_SIZE];
+  parquet::ByteArray* byte_value = new parquet::ByteArray[1];
+  // memset(values, 0, sizeof(int64_t) * BATCH_SIZE);
 
   // Iterate over all the RowGroups in the file
   int col_id = file_metadata->schema()->ColumnIndex("id");
@@ -372,10 +373,7 @@ int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, const std::string& p
         parquet_reader->RowGroup(rg);
 
     int64_t values_read = 0;
-    int64_t rows_read = 0;
     std::shared_ptr<parquet::ColumnReader> column_reader;
-
-    ARROW_UNUSED(rows_read);  // prevent warning in release build
 
     // Read the label column
     // Get the Column Reader for the ByteArray column
@@ -383,56 +381,32 @@ int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, const std::string& p
     // parquet::ByteArrayReader* string_reader =
     //     static_cast<parquet::ByteArrayReader*>(column_reader.get());
     auto id_reader = std::static_pointer_cast<parquet::Int64Reader>(column_reader);
-    // Read all the rows in the column
-    while (id_reader->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          id_reader->ReadBatch(BATCH_SIZE, nullptr, nullptr, values, &values_read);
-
+    auto first_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id2));
+    auto last_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id3));
+    // Read BATCH_SIZE values at a time. The number of rows read is returned.
+    auto num_row_rg = file_metadata->RowGroup(rg)->num_rows();
+    int64_t last_i = 0;
+    for (int64_t i = 0; i < num_row_rg; i++) {
       // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if ((bit_map[index >> 6] & (1UL << (index & 63))) && (bit_map_2[index >> 6] & (1UL << (index & 63)))) {
-          _id.push_back(values[i]);
-          count++;
-        }
-        index++;
+      if ((bit_map[index >> 6] & (1UL << (index & 63))) && (bit_map_2[index >> 6] & (1UL << (index & 63)))) {
+        id_reader->Skip(i - last_i);
+        first_name_reader->Skip(i - last_i);
+        last_name_reader->Skip(i - last_i);
+        int64_t value = 0;
+        id_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
+        _id.push_back(std::move(value));
+        first_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        _first_name.push_back(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+        last_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        _last_name.push_back(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+        last_i = i + 1;
+        count++;
       }
-    }
-    column_reader = row_group_reader->Column(col_id2);
-    parquet::ByteArrayReader* string_reader =
-        static_cast<parquet::ByteArrayReader*>(column_reader.get());
-    // Read all the rows in the column
-    while (string_reader->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          string_reader->ReadBatch(BATCH_SIZE, nullptr, nullptr, byte_values, &values_read);
-
-      // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if ((bit_map[index2 >> 6] & (1UL << (index2 & 63))) && (bit_map_2[index2 >> 6] & (1UL << (index2 & 63)))) {
-          _first_name.push_back(std::string((char*)byte_values[i].ptr, byte_values[i].len));
-        }
-        index2++;
-      }
-    }
-    column_reader = row_group_reader->Column(col_id3);
-    string_reader =
-        static_cast<parquet::ByteArrayReader*>(column_reader.get());
-    // Read all the rows in the column
-    while (string_reader->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          string_reader->ReadBatch(BATCH_SIZE, nullptr, nullptr, byte_values, &values_read);
-
-      // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if ((bit_map[index3 >> 6] & (1UL << (index3 & 63))) && (bit_map_2[index3 >> 6] & (1UL << (index3 & 63)))) {
-          _last_name.push_back(std::string((char*)byte_values[i].ptr, byte_values[i].len));
-        }
-        index3++;
-      }
+      index++;
     }
   }
+
+  delete[] byte_value;
   return count;
 }
 
@@ -441,7 +415,7 @@ int Intersection(const std::unordered_set<int64_t>& ids, const std::string& path
   std::vector<std::string> _first_name;
   std::vector<std::string> _last_name;
 
-  std::unordered_set<int64_t> indices, indices2;
+  std::unordered_set<int64_t> indices;
   std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
       parquet::ParquetFileReader::OpenFile(path_to_table, false);
 
@@ -453,7 +427,7 @@ int Intersection(const std::unordered_set<int64_t>& ids, const std::string& path
 
   // char* char_buffer = new char[total_length];
   int64_t *values = new int64_t[BATCH_SIZE];
-  parquet::ByteArray* byte_values = new parquet::ByteArray[BATCH_SIZE];
+  parquet::ByteArray* byte_value = new parquet::ByteArray[1];
   memset(values, 0, sizeof(int64_t) * BATCH_SIZE);
   int index = 0, count = 0;
 
@@ -496,103 +470,61 @@ int Intersection(const std::unordered_set<int64_t>& ids, const std::string& path
   // Iterate over all the RowGroups in the file
   index = 0;
   col_id = file_metadata->schema()->ColumnIndex("labels");
+  int col_id2 = file_metadata->schema()->ColumnIndex("firstName");
+  int col_id3 = file_metadata->schema()->ColumnIndex("lastName");
   for (int rg = 0; rg < row_group_count; ++rg) {
     // Get the RowGroup Reader
     std::shared_ptr<parquet::RowGroupReader> row_group_reader =
         parquet_reader->RowGroup(rg);
 
     int64_t values_read = 0;
-    int64_t rows_read = 0;
     std::shared_ptr<parquet::ColumnReader> column_reader;
-
-    ARROW_UNUSED(rows_read);  // prevent warning in release build
+    std::shared_ptr<parquet::ColumnReader> column_reader2;
+    std::shared_ptr<parquet::ColumnReader> column_reader3;
 
     // Read the label column
     // Get the Column Reader for the ByteArray column
     column_reader = row_group_reader->Column(col_id);
+    column_reader2 = row_group_reader->Column(col_id2);
+    column_reader3 = row_group_reader->Column(col_id3);
     parquet::ByteArrayReader* string_reader =
         static_cast<parquet::ByteArrayReader*>(column_reader.get());
-    // Read all the rows in the column
-    while (string_reader->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          string_reader->ReadBatch(BATCH_SIZE, nullptr, nullptr, byte_values, &values_read);
-
+    parquet::ByteArrayReader* first_name_reader =
+        static_cast<parquet::ByteArrayReader*>(column_reader2.get());
+    parquet::ByteArrayReader* last_name_reader =
+        static_cast<parquet::ByteArrayReader*>(column_reader3.get());
       // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if (byte_values[i].len > 0 && indices.find(index) != indices.end()) {
-          auto find_ptr =
-              strstr((char*)byte_values[i].ptr, label.c_str());
-          if (find_ptr != nullptr && find_ptr +
+    auto row_num_rg = file_metadata->RowGroup(rg)->num_rows();
+    int last_i = 0;
+    int last_i2 = 0;
+    for (int i = 0; i < row_num_rg; i++) {
+      if (indices.find(index) != indices.end()) {
+        string_reader->Skip(i - last_i);
+        string_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        auto find_ptr =
+              strstr((char*)byte_value[0].ptr, label.c_str());
+        if (find_ptr != nullptr && find_ptr +
                                              label.size() -
-                                             (char*)byte_values[i].ptr <=
-                                         byte_values[i].len) {
-            indices2.insert(index);
+                                             (char*)byte_value[0].ptr <=
+                                         byte_value[0].len) {
             _id.push_back(index_to_id[index]);
+            first_name_reader->Skip(i - last_i2);
+            last_name_reader->Skip(i - last_i2);
+            first_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+            _first_name.push_back(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+            last_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+            _last_name.push_back(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+            last_i2 = i + 1;
             count++;
-          }
         }
-        index++;
+        last_i = i + 1;
       }
+      index++;
     }
   }
 
-  // process first name
-  index = 0;
-  int index2 = 0; 
-  col_id = file_metadata->schema()->ColumnIndex("firstName");
-  int col_id2 = file_metadata->schema()->ColumnIndex("lastName");
-  for (int rg = 0; rg < row_group_count; ++rg) {
-    // Get the RowGroup Reader
-    std::shared_ptr<parquet::RowGroupReader> row_group_reader =
-        parquet_reader->RowGroup(rg);
-
-    int64_t values_read = 0;
-    int64_t rows_read = 0;
-    std::shared_ptr<parquet::ColumnReader> column_reader;
-
-    ARROW_UNUSED(rows_read);  // prevent warning in release build
-
-    // Read the label column
-    // Get the Column Reader for the ByteArray column
-    column_reader = row_group_reader->Column(col_id);
-    parquet::ByteArrayReader* string_reader =
-        static_cast<parquet::ByteArrayReader*>(column_reader.get());
-    // Read all the rows in the column
-    while (string_reader->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          string_reader->ReadBatch(BATCH_SIZE, nullptr, nullptr, byte_values, &values_read);
-
-      // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if (byte_values[i].len > 0 && indices2.find(index) != indices2.end()) {
-          _first_name.push_back(std::string((char*)byte_values[i].ptr, byte_values[i].len));
-        }
-        index++;
-      }
-    }
-
-    column_reader = row_group_reader->Column(col_id2);
-    parquet::ByteArrayReader* string_reader2 =
-        static_cast<parquet::ByteArrayReader*>(column_reader.get());
-    // Read all the rows in the column
-    while (string_reader2->HasNext()) {
-      // Read BATCH_SIZE values at a time. The number of rows read is returned.
-      rows_read =
-          string_reader2->ReadBatch(BATCH_SIZE, nullptr, nullptr, byte_values, &values_read);
-
-      // check and update results
-      for (int i = 0; i < rows_read; i++) {
-        if (byte_values[i].len > 0 && indices2.find(index2) != indices2.end()) {
-          _last_name.push_back(std::string((char*)byte_values[i].ptr, byte_values[i].len));
-        }
-        index2++;
-      }
-    }
-  }
   delete[] values;
-  delete[] byte_values;
+  delete[] byte_value;
   return count;
 }
 
