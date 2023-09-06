@@ -17,6 +17,14 @@
 
 #include <time.h>
 
+#include "arrow/dataset/api.h"
+#include "arrow/acero/exec_plan.h"
+#include "arrow/compute/api.h"
+#include "arrow/compute/expression.h"
+#include "arrow/dataset/dataset.h"
+#include "arrow/dataset/plan.h"
+#include "arrow/dataset/scanner.h"
+
 #include "arrow/api.h"
 #include "arrow/io/api.h"
 #include "arrow/result.h"
@@ -31,8 +39,8 @@
 #include <iostream>
 #include <cstdlib>
 
-// #define BITMAP_SIZE (4847571 / 64) + 1
-#define BITMAP_SIZE (58655849 / 64) + 1
+namespace ds = arrow::dataset;
+namespace cp = arrow::compute;
 
 int random_num(int last) {
   std::srand(last);
@@ -222,34 +230,33 @@ void ReadBitMapBaseLine(const std::string& path_to_file, const int64_t& offset, 
 }
 
 void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id, uint64_t* bit_map) {
-  arrow::MemoryPool* pool = arrow::default_memory_pool();
-  std::shared_ptr<arrow::io::RandomAccessFile> input;
-  input = arrow::io::ReadableFile::Open(path_to_file).ValueOrDie();
+  std::shared_ptr<ds::FileFormat> format = std::make_shared<ds::ParquetFileFormat>();
+  auto fs = arrow::fs::FileSystemFromUriOrPath(path_to_file).ValueOrDie();
+  auto factory = arrow::dataset::FileSystemDatasetFactory::Make(
+                        fs, {path_to_file}, format,
+                        arrow::dataset::FileSystemFactoryOptions()).ValueOrDie();
+  auto dataset = factory->Finish().ValueOrDie();
+  auto options = std::make_shared<arrow::dataset::ScanOptions>();
 
-  // Open Parquet file reader
-  std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
-  auto status = parquet::arrow::OpenFile(input, pool, &arrow_reader);
-  if (!status.ok()) {
-    std::cerr << "Parquet read error: " << status.message() << std::endl;
-    return;
-  }
+  cp::Expression filter_expr = cp::equal(cp::field_ref("src"), cp::literal(vertex_id));
+  options->filter = filter_expr;
+  auto scan_builder = dataset->NewScan().ValueOrDie();
+  scan_builder->Project({"dst"});
+  scan_builder->Filter(std::move(filter_expr));
+  scan_builder->UseThreads(false);
+  auto scanner = scan_builder->Finish().ValueOrDie();
+  auto table = scanner->ToTable().ValueOrDie();
 
-  // Read entire file as a single Arrow table
-  std::shared_ptr<arrow::Table> table;
-  status = arrow_reader->ReadTable(&table);
-  if (!status.ok()) {
-    std::cerr << "Table read error: " << status.message() << std::endl;
-    return;
-  }
-
-  // flatten the arrow table
-  auto flatten_table = table->CombineChunks(pool).ValueOrDie();
-  auto src_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(0)->chunk(0));
-  auto dst_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(1)->chunk(0));
-  for (int64_t i = 0; i < src_array->length(); ++i) {
-    // if (src_array->Value(i) == 10010) {
-    if (src_array->Value(i) == vertex_id) {
-      set_bit(bit_map, dst_array->Value(i));
+  auto chunked_array = table->column(0);
+  auto chunk_num = chunked_array->num_chunks();
+  for (int i = 0; i < chunk_num; ++i) {
+    auto array = static_cast<arrow::Int64Array*>(chunked_array->chunk(i).get());
+    for (int j = 0; j < array->length(); ++j) {
+      set_bit(bit_map, array->Value(j));
+      // auto index = static_cast<uint64_t>(array->Value(j));
+      // if (!(bit_map[index >> 6] & (1UL << (index & 63)))) {
+      //   throw std::runtime_error("Bit map is not correct");
+      // }
     }
   }
 }
@@ -337,7 +344,7 @@ void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, in
 
 void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
   // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
-  std::string path = path_to_file + "-base";
+  std::string path = path_to_file + "-origin-base";
   uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
   memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
   auto run_start = clock();
@@ -364,9 +371,9 @@ void CheckCorretness(const std::string& path_to_file, int32_t vertex_num, int64_
   int64_t offset = 0, length = 0;
   getOffset(path_to_file + "-offset", vertex_id, offset, length);
   std::cout << "offset: " << offset << " length: " << length << std::endl;
-  ReadBitMap(path_to_file + "-delta", offset, length, bit_map);
-  ReadBitMapBaseLine(path_to_file + "-base", offset, length, bit_map);
-  // ReadBitMapBaseLineNoOffset(path_to_file + "-base", vertex_id, bit_map);
+  ReadBitMap(path_to_file + "-2-delta", offset, length, bit_map);
+  // ReadBitMapBaseLine(path_to_file + "-base", offset, length, bit_map);
+  ReadBitMapBaseLineNoOffset(path_to_file + "-origin-base", vertex_id, bit_map);
   delete[] bit_map;
   return;
 }

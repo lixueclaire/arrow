@@ -29,6 +29,7 @@
 #include "parquet/file_writer.h"
 #include "parquet/metadata.h"
 
+#include "arrow/dataset/api.h"
 #include "arrow/acero/exec_plan.h"
 #include "arrow/compute/api.h"
 #include "arrow/compute/expression.h"
@@ -39,42 +40,13 @@
 #include <iostream>
 #include <cstdlib>
 
-// #define BITMAP_SIZE (4847571 / 64) + 1
-#define BITMAP_SIZE (58655849 / 64) + 1
+namespace ds = arrow::dataset;
+namespace cp = arrow::compute;
 
-int random_num(int last) {
-  std::srand(last);
-  return rand() % 15 + 1;
-}
+constexpr int BATCH_SIZE = 1024;                     // the batch size
 
 void set_bit(uint64_t* bitmap, uint64_t curr) {
     bitmap[curr >> 6] |= (1ULL << (curr & 0x3f));
-}
-
-arrow::Result<std::shared_ptr<arrow::Table>> GetTable() {
-  auto builder = arrow::Int64Builder();
-  auto builder2 = arrow::Int64Builder();
-
-  std::shared_ptr<arrow::Array> arr_src, arr_dst;
-  int last = 0;
-  for (int i = 0; i < 10000000; ++i) {
-    // last += random_num(last);
-    ARROW_RETURN_NOT_OK(builder.Append(last));
-    ARROW_RETURN_NOT_OK(builder2.Append(last));
-    last += 1;
-  }
-  ARROW_RETURN_NOT_OK(builder.Finish(&arr_src));
-  ARROW_RETURN_NOT_OK(builder.Finish(&arr_dst));
-
-  // std::shared_ptr<arrow::Array> arr_y;
-  // ARROW_RETURN_NOT_OK(builder.AppendValues({2, 4, 6, 8, 10}));
-  // ARROW_RETURN_NOT_OK(builder.Finish(&arr_y));
-
-  auto schema = arrow::schema(
-      // {arrow::field("x", arrow::int64()), arrow::field("y", arrow::int32())});
-      {arrow::field("x", arrow::int64())});
-
-  return arrow::Table::Make(schema, {arr_src});
 }
 
 std::shared_ptr<arrow::Table> DoHashJoin(
@@ -246,35 +218,23 @@ void ReadBitMapBaseLine(const std::string& path_to_file, const int64_t& offset, 
   return;
 }
 
-arrow::Result<std::shared_ptr<arrow::Table>> ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id) {
-  arrow::MemoryPool* pool = arrow::default_memory_pool();
-  std::shared_ptr<arrow::io::RandomAccessFile> input;
-  input = arrow::io::ReadableFile::Open(path_to_file).ValueOrDie();
+std::shared_ptr<arrow::Table> ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id) {
+  std::shared_ptr<ds::FileFormat> format = std::make_shared<ds::ParquetFileFormat>();
+  auto fs = arrow::fs::FileSystemFromUriOrPath(path_to_file).ValueOrDie();
+  auto factory = arrow::dataset::FileSystemDatasetFactory::Make(
+                        fs, {path_to_file}, format,
+                        arrow::dataset::FileSystemFactoryOptions()).ValueOrDie();
+  auto dataset = factory->Finish().ValueOrDie();
+  auto options = std::make_shared<arrow::dataset::ScanOptions>();
 
-  // Open Parquet file reader
-  std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
-  ARROW_RETURN_NOT_OK(parquet::arrow::OpenFile(input, pool, &arrow_reader));
-
-  // Read entire file as a single Arrow table
-  std::shared_ptr<arrow::Table> table;
-  ARROW_RETURN_NOT_OK(arrow_reader->ReadTable(&table));
-
-  // flatten the arrow table
-  auto flatten_table = table->CombineChunks(pool).ValueOrDie();
-  auto src_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(0)->chunk(0));
-  auto dst_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(1)->chunk(0));
-  auto builder = arrow::Int64Builder();
-  std::shared_ptr<arrow::Array> array;
-  for (int64_t i = 0; i < src_array->length(); ++i) {
-    if (src_array->Value(i) == vertex_id) {
-      ARROW_RETURN_NOT_OK(builder.Append(dst_array->Value(i)));
-    }
-  }
-  ARROW_RETURN_NOT_OK(builder.Finish(&array));
-  auto schema = arrow::schema(
-    // {arrow::field("x", arrow::int64()), arrow::field("y", arrow::int32())});
-    {arrow::field("index", arrow::int64())});
-  return arrow::Table::Make(schema, {array});
+  cp::Expression filter_expr = cp::equal(cp::field_ref("src"), cp::literal(vertex_id));
+  options->filter = filter_expr;
+  auto scan_builder = dataset->NewScan().ValueOrDie();
+  scan_builder->Project({"dst"});
+  scan_builder->Filter(std::move(filter_expr));
+  scan_builder->UseThreads(false);
+  auto scanner = scan_builder->Finish().ValueOrDie();
+  return scanner->ToTable().ValueOrDie();
 }
 
 int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, int64_t length) {
@@ -286,16 +246,24 @@ int RunIntersection(uint64_t* bit_map, uint64_t* bit_map_2, int64_t length) {
 }
 
 int Intersection(std::shared_ptr<arrow::Table>& table1, std::shared_ptr<arrow::Table>& table2) {
-  auto array_1 = std::dynamic_pointer_cast<arrow::Int64Array>(table1->column(0)->chunk(0));
-  auto array_2 = std::dynamic_pointer_cast<arrow::Int64Array>(table2->column(0)->chunk(0));
-  std::unordered_set<int64_t> set_1;
-  for (int64_t i = 0; i < array_1->length(); ++i) {
-    set_1.insert(array_1->Value(i));
+  std::unordered_set<int64_t> ids;
+  auto chunked_array = table1->column(0);
+  auto chunk_num = chunked_array->num_chunks();
+  for (int i = 0; i < chunk_num; ++i) {
+    auto array = static_cast<arrow::Int64Array*>(chunked_array->chunk(i).get());
+    for (int j = 0; j < array->length(); ++j) {
+      ids.insert(array->GetView(j));
+    }
   }
   int count = 0;
-  for (int64_t i = 0; i < array_2->length(); ++i) {
-    if (set_1.find(array_2->Value(i)) != set_1.end()) {
-      count++;
+  chunked_array = table2->column(0);
+  chunk_num = chunked_array->num_chunks();
+  for (int i = 0; i < chunk_num; ++i) {
+    auto array = static_cast<arrow::Int64Array*>(chunked_array->chunk(i).get());
+    for (int j = 0; j < array->length(); ++j) {
+      if (ids.find(array->GetView(j)) != ids.end()) {
+        count++;
+      }
     }
   }
   return count;
@@ -380,24 +348,24 @@ void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, in
 }
 
 void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id, int64_t vertex_id2 ) {
-  std::string path = path_to_file + "-base";
+  std::string path = path_to_file + "-origin-base";
   std::shared_ptr<arrow::Table> table, table2;
   auto run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
-  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2).ValueOrDie();
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
+  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2);
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "First run get bit map time: " << run_time << " ms" << std::endl;
   run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
-  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2).ValueOrDie();
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
+  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2);
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
-  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2).ValueOrDie();
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
+  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2);
   auto run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id).ValueOrDie();
-  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2).ValueOrDie();
+  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
+  table2 = ReadBitMapBaseLineNoOffset(path, vertex_id2);
   auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "Average run get bit map time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
   int count = 0;

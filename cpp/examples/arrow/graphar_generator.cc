@@ -28,12 +28,16 @@ limitations under the License.
 #include "parquet/arrow/reader.h"
 #include "parquet/arrow/writer.h"
 
+#include "arrow/dataset/api.h"
 #include "arrow/acero/exec_plan.h"
 #include "arrow/compute/api.h"
 #include "arrow/compute/expression.h"
 #include "arrow/dataset/dataset.h"
 #include "arrow/dataset/plan.h"
 #include "arrow/dataset/scanner.h"
+
+namespace ds = arrow::dataset;
+namespace cp = arrow::compute;
 
 using AsyncGeneratorType =
     arrow::AsyncGenerator<std::optional<arrow::compute::ExecBatch>>;
@@ -77,7 +81,7 @@ arrow::Status WriteToParquet(std::shared_ptr<arrow::Table> table,
 
   // Choose compression
   std::shared_ptr<WriterProperties> props =
-        WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
+        WriterProperties::Builder().build();
   // std::shared_ptr<WriterProperties> props =
   //     WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
 
@@ -87,7 +91,6 @@ arrow::Status WriteToParquet(std::shared_ptr<arrow::Table> table,
 
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
   ARROW_ASSIGN_OR_RAISE(outfile, arrow::io::FileOutputStream::Open(path_to_file));
-
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(*table.get(),
                                                  arrow::default_memory_pool(), outfile,
                                                  /*chunk_size=*/1024 * 1024, props, arrow_props));
@@ -115,12 +118,14 @@ std::shared_ptr<arrow::Table> read_csv_to_arrow_table(
     parse_options.delimiter = '|'; 
   }
   auto convert_options = arrow::csv::ConvertOptions::Defaults();
+  /*
   if (is_weighted) {
     read_options.column_names = {"src", "dst", "weight"};
   } else {
     read_options.column_names = {"src", "dst"};
   }
   read_options.column_names = {"src", "dst", "weight"};
+  */
 
   // Instantiate TableReader from input stream and options
   auto maybe_reader = arrow::csv::TableReader::Make(
@@ -361,9 +366,33 @@ std::shared_ptr<arrow::Table> SortKeys(
                                       input_table->schema(), sink_gen);
 }
 
+std::shared_ptr<arrow::Table> SortKeys2(
+  const std::shared_ptr<arrow::Table>& input_table) {
+  std::vector<arrow::compute::SortKey> sort_keys;
+  sort_keys.emplace_back(kDstIndexCol, arrow::compute::SortOrder::Ascending);
+  sort_keys.emplace_back(kSrcIndexCol, arrow::compute::SortOrder::Ascending);
+  arrow::compute::SortOptions options(sort_keys);
+
+  auto exec_context = arrow::compute::default_exec_context();
+  auto plan = arrow::acero::ExecPlan::Make(exec_context).ValueOrDie();
+  auto table_source_options =
+      arrow::acero::TableSourceNodeOptions{input_table};
+  auto source = arrow::acero::MakeExecNode("table_source", plan.get(),
+                                                    {}, table_source_options)
+                    .ValueOrDie();
+  AsyncGeneratorType sink_gen;
+  DCHECK_OK(arrow::acero::MakeExecNode(
+        "order_by_sink", plan.get(), {source},
+        arrow::acero::OrderBySinkNodeOptions{
+            options,
+            &sink_gen}).status());
+  return ExecutePlanAndCollectAsTable(*exec_context, plan,
+                                      input_table->schema(), sink_gen);
+}
+
 std::shared_ptr<arrow::Table> getOffsetTable(
     const std::shared_ptr<arrow::Table>& input_table,
-    const std::string& column_name, int64_t vertex_num) {
+    const std::string& column_name, int64_t vertex_num, int64_t begin) {
   std::shared_ptr<arrow::ChunkedArray> column =
       input_table->GetColumnByName(column_name);
   int64_t array_index = 0, index = 0;
@@ -378,7 +407,6 @@ std::shared_ptr<arrow::Table> getOffsetTable(
       {arrow::field(kOffsetCol, arrow::int64())});
 
   int64_t global_index = 0, pre_global_index = 0;
-  int64_t max = 0, max_i = 0, max_pre_global_index = 0;
   for (int64_t i = 0; i < vertex_num; i++) {
     while (true) {
       if (array_index >= column->num_chunks())
@@ -397,43 +425,158 @@ std::shared_ptr<arrow::Table> getOffsetTable(
         continue;
       }
       int64_t x = ids->Value(index);
-      if (x <= i) {
+      if (x <= (i + begin)) {
         index++;
         global_index++;
       } else {
         break;
       }
     }
-    if (global_index - pre_global_index > max) {
-      max_pre_global_index = pre_global_index;
-      max = global_index - pre_global_index;
-      max_i = i;
-    } 
     DCHECK_OK(builder.Append(global_index));
     pre_global_index = global_index;
   }
-  std::cout << "max: " << max << ", max_i: " << max_i << ", max_pre_global_index: " << max_pre_global_index << std::endl;
+  // std::cout << "max: " << max << ", max_i: " << max_i << ", max_pre_global_index: " << max_pre_global_index << std::endl;
 
   auto array = builder.Finish().ValueOrDie();
   arrays.push_back(array);
   return arrow::Table::Make(schema, arrays);
 }
 
+void ProcessVertexTable(const std::string& label,  std::shared_ptr<arrow::Table> table, int64_t vertex_chunk_size) {
+  auto fs = arrow::fs::FileSystemFromUriOrPath("/mnt/ldbc/weibin/ldbc-gar/sf100").ValueOrDie();
+
+  table = table->SelectColumns({0, 1, 2, 3, 6, 7}).ValueOrDie();
+  auto schema = table->schema();
+  std::string col_names = ""; 
+  for (int i = 0; i < schema->num_fields(); i++) {
+    col_names += schema->field(i)->name() + "_";
+  }
+  col_names.pop_back();
+  auto num_row = table->num_rows();
+
+  auto path_prefix = "/mnt/ldbc/weibin/ldbc-gar/sf100/vertex/" + label;
+  fs->CreateDir(path_prefix + "/" + col_names);
+  for (int chunk_i = 0; chunk_i * vertex_chunk_size < num_row; chunk_i++) {
+    auto sub_table = table->Slice(chunk_i * vertex_chunk_size, vertex_chunk_size);
+    auto path_to_file = path_prefix + "/" + col_names + "/chunk" + std::to_string(chunk_i);
+    WriteToParquet(sub_table, path_to_file);
+  }
+  auto ofstream = fs->OpenOutputStream(path_prefix + "/vertex_count").ValueOrDie();
+  ofstream->Write(&num_row, sizeof(int64_t));
+  ofstream->Close();
+}
+
+std::shared_ptr<arrow::Table> FilterPushDown(std::shared_ptr<arrow::Table> table, int64_t begin, int64_t end) {
+  auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
+  auto options = std::make_shared<arrow::dataset::ScanOptions>();
+
+  cp::Expression filter_expr_1 = cp::greater_equal(cp::field_ref("_graphArSrcIndex"), cp::literal(begin));
+  cp::Expression filter_expr_2 = cp::less(cp::field_ref("_graphArSrcIndex"), cp::literal(end));
+  cp::Expression filter_expr = cp::and_(filter_expr_1, filter_expr_2);
+  options->filter = filter_expr;
+  auto scan_builder = dataset->NewScan().ValueOrDie();
+  scan_builder->Project({"_graphArSrcIndex", "_graphArDstIndex"});
+  scan_builder->Filter(std::move(filter_expr));
+  scan_builder->UseThreads(false);
+  auto scanner = scan_builder->Finish().ValueOrDie();
+  return scanner->ToTable().ValueOrDie();
+}
+
+std::shared_ptr<arrow::Table> FilterPushDown2(std::shared_ptr<arrow::Table> table, int64_t begin, int64_t end) {
+  auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
+  auto options = std::make_shared<arrow::dataset::ScanOptions>();
+
+  cp::Expression filter_expr_1 = cp::greater_equal(cp::field_ref("_graphArDstIndex"), cp::literal(begin));
+  cp::Expression filter_expr_2 = cp::less(cp::field_ref("_graphArDstIndex"), cp::literal(end));
+  cp::Expression filter_expr = cp::and_(filter_expr_1, filter_expr_2);
+  options->filter = filter_expr;
+  auto scan_builder = dataset->NewScan().ValueOrDie();
+  scan_builder->Project({"_graphArSrcIndex", "_graphArDstIndex"});
+  scan_builder->Filter(std::move(filter_expr));
+  scan_builder->UseThreads(false);
+  auto scanner = scan_builder->Finish().ValueOrDie();
+  return scanner->ToTable().ValueOrDie();
+}
+
+void ProcessAdjTable(std::shared_ptr<arrow::Table> table, int64_t vertex_num, int64_t vertex_chunk_size, int64_t edge_chunk_size, const std::string& src_label, const std::string& dst_label, const std::string& edge_label) {
+  auto fs = arrow::fs::FileSystemFromUriOrPath("/mnt/ldbc/weibin/ldbc-gar/sf100").ValueOrDie();
+
+  table = table->SelectColumns({0, 1}).ValueOrDie();
+  // std::cout << "schema: " << table->schema()->ToString() << "\n" << table->ToString() << std::endl;
+  auto path_prefix = "/mnt/ldbc/weibin/ldbc-gar/sf100/edge/" + src_label + "_" + edge_label + "_" + dst_label;
+  fs->CreateDir(path_prefix + "/ordered_by_source/adj_list");
+  for (int chunk_i = 0; chunk_i * vertex_chunk_size < vertex_num; chunk_i++) {
+    int64_t begin = chunk_i * vertex_chunk_size;
+    int64_t end = chunk_i * vertex_chunk_size + vertex_chunk_size;
+    auto sub_table = FilterPushDown(table, begin, end);
+    // std::cout << "sub_table : " << sub_table->ToString() << std::endl;
+    auto sub_num_row = sub_table->num_rows();
+    fs->CreateDir(path_prefix + "/ordered_by_source/adj_list/part" + std::to_string(chunk_i));
+    for (int j = 0; j * edge_chunk_size < sub_num_row; j++) {
+      auto sub_sub_table = sub_table->Slice(j * edge_chunk_size, edge_chunk_size);
+      auto path_to_file = path_prefix + "/ordered_by_source/adj_list/part" + std::to_string(chunk_i) + "/chunk" + std::to_string(j);
+      WriteToParquet(sub_sub_table, path_to_file);
+    }
+    fs->CreateDir(path_prefix + "/ordered_by_source/offset");
+    auto offset = getOffsetTable(sub_table, "_graphArSrcIndex", vertex_chunk_size, begin);
+    WriteToParquet(offset, path_prefix + "/ordered_by_source/offset/chunk" + std::to_string(chunk_i));
+    auto ofstream = fs->OpenOutputStream(path_prefix + "/ordered_by_source/edge_count" + std::to_string(chunk_i)).ValueOrDie();
+    ofstream->Write(&sub_num_row, sizeof(int64_t));
+    ofstream->Close();
+  }
+  auto ofstream = fs->OpenOutputStream(path_prefix + "/ordered_by_source/vertex_count").ValueOrDie();
+  ofstream->Write(&vertex_num, sizeof(int64_t));
+  ofstream->Close();
+}
+
+void ProcessAdjTable2(std::shared_ptr<arrow::Table> table, int64_t vertex_num, int64_t vertex_chunk_size, int64_t edge_chunk_size, const std::string& src_label, const std::string& dst_label, const std::string& edge_label) {
+  auto fs = arrow::fs::FileSystemFromUriOrPath("/mnt/ldbc/weibin/ldbc-gar/sf100").ValueOrDie();
+
+  table = table->SelectColumns({0, 1}).ValueOrDie();
+  // std::cout << "schema: " << table->schema()->ToString() << "\n" << table->ToString() << std::endl;
+  auto path_prefix = "/mnt/ldbc/weibin/ldbc-gar/sf100/edge/" + src_label + "_" + edge_label + "_" + dst_label;
+  fs->CreateDir(path_prefix + "/ordered_by_dest/adj_list");
+  for (int chunk_i = 0; chunk_i * vertex_chunk_size < vertex_num; chunk_i++) {
+    int64_t begin = chunk_i * vertex_chunk_size;
+    int64_t end = chunk_i * vertex_chunk_size + vertex_chunk_size;
+    auto sub_table = FilterPushDown2(table, begin, end);
+    std::cout << "sub_table : " << sub_table->num_rows() << sub_table->ToString() << std::endl;
+    auto sub_num_row = sub_table->num_rows();
+    fs->CreateDir(path_prefix + "/ordered_by_dest/adj_list/part" + std::to_string(chunk_i));
+    for (int j = 0; j * edge_chunk_size < sub_num_row; j++) {
+      auto sub_sub_table = sub_table->Slice(j * edge_chunk_size, edge_chunk_size);
+      auto path_to_file = path_prefix + "/ordered_by_dest/adj_list/part" + std::to_string(chunk_i) + "/chunk" + std::to_string(j);
+      WriteToParquet(sub_sub_table, path_to_file);
+    }
+    fs->CreateDir(path_prefix + "/ordered_by_dest/offset");
+    auto offset = getOffsetTable(sub_table, "_graphArDstIndex", vertex_chunk_size, begin);
+    std::cout << "offset : " << offset->num_rows() << offset->ToString() << std::endl;
+    WriteToParquet(offset, path_prefix + "/ordered_by_dest/offset/chunk" + std::to_string(chunk_i));
+    auto ofstream = fs->OpenOutputStream(path_prefix + "/ordered_by_dest/edge_count" + std::to_string(chunk_i)).ValueOrDie();
+    ofstream->Write(&sub_num_row, sizeof(int64_t));
+    ofstream->Close();
+  }
+  auto ofstream = fs->OpenOutputStream(path_prefix + "/ordered_by_dest/vertex_count").ValueOrDie();
+  ofstream->Write(&vertex_num, sizeof(int64_t));
+  ofstream->Close();
+}
+
 void write_to_graphar(
-    const std::string& path_to_file,
     const std::string& src_vertex_source_file,
     const std::string& edge_source_file,
-    const std::string& dst_vertex_source_file) {
+    const std::string& dst_vertex_source_file,
+    const std::string& src_label,
+    const std::string& dst_label,
+    const std::string& edge_label,
+    int64_t vertex_chunk_size,
+    int64_t edge_chunk_size) {
     // read vertex source to arrow table
     std::string delemiter = "|";
     // read vertex source to arrow table
-    // auto dst_vertex_table = read_vertex_csv_to_arrow_table(dst_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
     auto dst_vertex_table = read_vertex_csv_to_arrow_table(dst_vertex_source_file, delemiter);
-    std::cout << "schema: " << dst_vertex_table->schema()->ToString() << std::endl;
-    return;
-    auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 1)->SelectColumns({0, 1}).ValueOrDie();
-    auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
-    auto run_start = clock();
+    ProcessVertexTable(dst_label, dst_vertex_table, vertex_chunk_size);
+    dst_vertex_table = dst_vertex_table->SelectColumns({0}).ValueOrDie()->RenameColumns({"id"}).ValueOrDie();
+    auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 0)->SelectColumns({0, 1}).ValueOrDie()->RenameColumns({"src", "dst"}).ValueOrDie();
     auto dst_vertex_table_with_index = add_index_column(dst_vertex_table, false);
     int64_t vertex_num = dst_vertex_table_with_index->num_rows();
     dst_vertex_table.reset();
@@ -441,7 +584,7 @@ void write_to_graphar(
     auto edge_table_with_dst_index = DoHashJoin(dst_vertex_table_with_index, edge_table, kDstIndexCol, "dst");
     edge_table.reset();
     std::shared_ptr<arrow::Table> src_vertex_table_with_index;
-    if (src_vertex_source_file == dst_vertex_source_file) {
+    if (src_label == dst_label) {
       // rename the column name
       auto old_schema = dst_vertex_table_with_index->schema();
       std::vector<std::string> new_names;
@@ -456,24 +599,27 @@ void write_to_graphar(
       }
       src_vertex_table_with_index = dst_vertex_table_with_index->RenameColumns(new_names).ValueOrDie();
     } else {
-      auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
+      auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter);
+      ProcessVertexTable(src_label, src_vertex_table, vertex_chunk_size);
+      src_vertex_table = src_vertex_table->SelectColumns({0}).ValueOrDie();
       src_vertex_table_with_index = add_index_column(src_vertex_table, true);
     }
     // DCHECK_OK(WriteToParquet(src_vertex_table_with_index, path_to_file + "-vertex"));
     dst_vertex_table_with_index.reset();
     // auto edge_table_with_src_dst_index = DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, kSrcIndexCol, "src")->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();;
     auto edge_table_with_src_dst_index = DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, kSrcIndexCol, "src");
-    edge_table_with_src_dst_index = convert_to_undirected(edge_table_with_src_dst_index);
+    // edge_table_with_src_dst_index = convert_to_undirected(edge_table_with_src_dst_index);
 
     auto table = SortKeys(edge_table_with_src_dst_index);
+    auto table_2 = SortKeys2(edge_table_with_src_dst_index);
     edge_table_with_src_dst_index.reset();
 
-    DCHECK_OK(WriteToFile(table, path_to_file + "-delta"));
-    DCHECK_OK(WriteToFileBaseLine(table, path_to_file+"-base"));
-    // writeToCsv(table, path_to_file + ".csv");
-    auto offset = getOffsetTable(table, kSrcIndexCol, vertex_num);
-    table.reset();
-    DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
+    ProcessAdjTable(table, vertex_num, vertex_chunk_size, edge_chunk_size, src_label, dst_label, edge_label);
+    ProcessAdjTable2(table_2, vertex_num, vertex_chunk_size, edge_chunk_size, src_label, dst_label, edge_label);
+
+    // auto offset = getOffsetTable(table, kSrcIndexCol, vertex_num);
+    // table.reset();
+    // DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
 
     return;
 }
@@ -482,6 +628,10 @@ int main(int argc, char* argv[]) {
    std::string edge_source_file = std::string(argv[1]);
    std::string src_vertex_source_file = std::string(argv[2]);
    std::string dst_vertex_source_file = std::string(argv[3]);
-   std::string path_to_file = std::string(argv[4]);
-   write_to_graphar(path_to_file, src_vertex_source_file, edge_source_file, dst_vertex_source_file);
+   std::string src_label = std::string(argv[4]);
+   std::string dst_label = std::string(argv[5]);
+   std::string edge_label = std::string(argv[6]);
+   int64_t vertex_chunk_size = std::stol(argv[7]);
+   int64_t edge_chunk_size = std::stol(argv[8]);
+   write_to_graphar(src_vertex_source_file, edge_source_file, dst_vertex_source_file, src_label, dst_label, edge_label, vertex_chunk_size, edge_chunk_size);
 }
