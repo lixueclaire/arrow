@@ -194,11 +194,11 @@ arrow::Status WriteToFileBaseLine(std::shared_ptr<arrow::Table> table,
   using parquet::ArrowWriterProperties;
   using parquet::WriterProperties;
 
-  // Choose compression
-  std::shared_ptr<WriterProperties> props =
-        WriterProperties::Builder().disable_dictionary()->compression(parquet::Compression::UNCOMPRESSED)->encoding("src", parquet::Encoding::PLAIN)->encoding("dst", parquet::Encoding::PLAIN)->build();
+  // Choose compressio
   // std::shared_ptr<WriterProperties> props =
-  //     WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->build();
+  //       WriterProperties::Builder().disable_dictionary()->compression(parquet::Compression::UNCOMPRESSED)->encoding(parquet::Encoding::PLAIN)->encoding("dst", parquet::Encoding::PLAIN)->build();
+  std::shared_ptr<WriterProperties> props =
+      WriterProperties::Builder().compression(parquet::Compression::UNCOMPRESSED)->encoding(parquet::Encoding::PLAIN)->build();
 
   // Opt to store Arrow schema for easier reads back into Arrow
   std::shared_ptr<ArrowWriterProperties> arrow_props =
@@ -220,6 +220,45 @@ std::shared_ptr<arrow::Table> convert_to_undirected(
   return new_table;
 }
 
+void writeToCsv(const std::shared_ptr<arrow::Table>& table, const std::string& path_to_file) {
+  std::shared_ptr<arrow::io::OutputStream> output = arrow::io::FileOutputStream::Open(path_to_file).ValueOrDie();
+  auto write_options = arrow::csv::WriteOptions::Defaults();
+  write_options.include_header = true;
+  write_options.delimiter = '|';
+  arrow::csv::WriteCSV(*table, write_options, output.get());
+  return;
+}
+
+void Csv2Csv(
+    const std::string& path_to_file,
+    // const std::string& vertex_source_file,
+    const std::string& edge_source_file,
+    int ignore_rows) {
+    // const std::string& label_file) {
+    // read vertex source to arrow table
+    std::string delemiter = "|";
+    // read vertex source to arrow table
+    auto table = read_vertex_csv_to_arrow_table(edge_source_file, delemiter);
+    std::cout << "num rows: " << table->num_rows() << std::endl;
+    table = table->SelectColumns({1, 2}).ValueOrDie();
+    // std::cout <<  "schema: " << table->schema()->ToString() << std::endl;
+    // table = table->RenameColumns({"Comment.id", "Comment.id2"}).ValueOrDie();
+    // auto label_table = read_label_parquet_to_arrow_table(label_file).ValueOrDie();
+    // auto new_vertex_table = vertex_table->AddColumn(vertex_table->num_columns(), label_table->field(0), label_table->column(0)).ValueOrDie();
+    // std::cout << "schema: " << new_vertex_table->schema()->ToString() << std::endl;
+    // auto edge_table = read_csv_to_arrow_table(edge_source_file, true, delemiter, ignore_rows)->SelectColumns({0, 1}).ValueOrDie();
+    // edge_table = edge_table->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({"src", "dst"}).ValueOrDie();
+    // std::cout << "reverse schema: " << edge_table->schema()->ToString() << std::endl;
+    // edge_table = convert_to_undirected(edge_table);
+
+    // DCHECK_OK(WriteToFileBaseLine(table, path_to_file+".parquet"));
+    // DCHECK_OK(WriteToFileBaseLine(new_vertex_table, path_to_file+"-vertex-base"));
+    writeToCsv(table, path_to_file+".csv");
+
+    return;
+}
+
+
 void Csv2Parquet(
     const std::string& path_to_file,
     // const std::string& vertex_source_file,
@@ -227,18 +266,25 @@ void Csv2Parquet(
     int ignore_rows) {
     // const std::string& label_file) {
     // read vertex source to arrow table
-    std::string delemiter = "space";
+    std::string delemiter = "|";
     // read vertex source to arrow table
-    // auto vertex_table = read_vertex_csv_to_arrow_table(vertex_source_file, delemiter);
+    auto table = read_vertex_csv_to_arrow_table(edge_source_file, delemiter);
+    std::cout << "num rows: " << table->num_rows() << std::endl;
+    // std::cout <<  "schema: " << table->schema()->ToString() << std::endl;
+    if (ignore_rows > 0) { 
+      std::cout << "ignore rows: " << ignore_rows << std::endl;
+      table = table->RenameColumns({"Comment.id", "Comment.id2"}).ValueOrDie();
+    }
+
     // auto label_table = read_label_parquet_to_arrow_table(label_file).ValueOrDie();
     // auto new_vertex_table = vertex_table->AddColumn(vertex_table->num_columns(), label_table->field(0), label_table->column(0)).ValueOrDie();
     // std::cout << "schema: " << new_vertex_table->schema()->ToString() << std::endl;
-    auto edge_table = read_csv_to_arrow_table(edge_source_file, true, delemiter, ignore_rows)->SelectColumns({0, 1}).ValueOrDie();
+    // auto edge_table = read_csv_to_arrow_table(edge_source_file, true, delemiter, ignore_rows)->SelectColumns({0, 1}).ValueOrDie();
     // edge_table = edge_table->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({"src", "dst"}).ValueOrDie();
     // std::cout << "reverse schema: " << edge_table->schema()->ToString() << std::endl;
     // edge_table = convert_to_undirected(edge_table);
 
-    DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file+"-origin-base"));
+    DCHECK_OK(WriteToFileBaseLine(table, path_to_file+".parquet"));
     // DCHECK_OK(WriteToFileBaseLine(new_vertex_table, path_to_file+"-vertex-base"));
 
     return;

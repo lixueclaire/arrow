@@ -642,7 +642,7 @@ int main(int argc, char** argv) {
   int64_t vertex_id = std::stol(argv[5]);
   std::string label = argv[6];
   std::cout << "path_to_file: " << path_to_file << " vertex_num: " << vertex_num << " vertex_id: " << vertex_id  << " label: " << label << std::endl;
-  // CheckCorretness(path_to_file, vertex_num, vertex_id);
+  // CheckCorrectness(path_to_file, vertex_num, vertex_id);
   // return 0;
   std::string type = argv[7];  
   if (type == "delta") {

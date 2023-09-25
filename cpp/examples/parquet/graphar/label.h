@@ -88,9 +88,11 @@ static inline int GetValidIntervals(const int column_number, const int row_numbe
                                     const QUERY_TYPE query_type = COUNT) {
   // initialization
   int current_pos = 0, previous_pos = 0, count = 0, min_pos;
-  int pos[MAX_LABEL_NUM] = {0};
-  int index[MAX_LABEL_NUM] = {0};
-  bool state[MAX_LABEL_NUM];
+  int *pos = new int[column_number], *index = new int[column_number];
+  bool *state = new bool[column_number];
+  memset(pos, 0, sizeof(int) * column_number);
+  memset(index, 0, sizeof(int) * column_number);
+  memset(state, 0, sizeof(bool) * column_number);
   for (int i = 0; i < column_number; ++i) {
     state[i] = repeated_values[i][index[i]];
   }

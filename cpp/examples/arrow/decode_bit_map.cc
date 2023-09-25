@@ -16,6 +16,7 @@
 // under the License.
 
 #include <time.h>
+#include <chrono>
 
 #include "arrow/dataset/api.h"
 #include "arrow/acero/exec_plan.h"
@@ -160,7 +161,7 @@ void ReadBitMap(const std::string& path_to_file, const int64_t& offset, const in
   }
   int64_t total_values_remaining = length;
   int64_t values_read = 0;
-  auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(1));
+  auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(0));
   col_reader->Skip(remain_offset);
   while (col_reader->HasNext() && total_values_remaining > 0) {
     col_reader->ReadBatch(total_values_remaining, bit_map, &values_read);
@@ -229,6 +230,8 @@ void ReadBitMapBaseLine(const std::string& path_to_file, const int64_t& offset, 
   return;
 }
 
+// with filter push down
+/*
 void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id, uint64_t* bit_map) {
   std::shared_ptr<ds::FileFormat> format = std::make_shared<ds::ParquetFileFormat>();
   auto fs = arrow::fs::FileSystemFromUriOrPath(path_to_file).ValueOrDie();
@@ -247,7 +250,7 @@ void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& 
   auto scanner = scan_builder->Finish().ValueOrDie();
   auto table = scanner->ToTable().ValueOrDie();
 
-  auto chunked_array = table->column(0);
+  auto chunked_array = table->column(1);
   auto chunk_num = chunked_array->num_chunks();
   for (int i = 0; i < chunk_num; ++i) {
     auto array = static_cast<arrow::Int64Array*>(chunked_array->chunk(i).get());
@@ -260,6 +263,87 @@ void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& 
     }
   }
 }
+*/
+
+void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id, uint64_t* bit_map) {
+  arrow::MemoryPool* pool = arrow::default_memory_pool();
+  std::shared_ptr<arrow::io::RandomAccessFile> input;
+  input = arrow::io::ReadableFile::Open(path_to_file).ValueOrDie();
+
+  // Open Parquet file reader
+  std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
+  auto status = parquet::arrow::OpenFile(input, pool, &arrow_reader);
+  if (!status.ok()) {
+    std::cerr << "Parquet read error: " << status.message() << std::endl;
+    return;
+  }
+
+  // Read entire file as a single Arrow table
+  std::shared_ptr<arrow::Table> table;
+  status = arrow_reader->ReadTable(&table);
+  std::cout << "schema: " << table->schema()->ToString() << std::endl;
+  if (!status.ok()) {
+    std::cerr << "Table read error: " << status.message() << std::endl;
+    return;
+  }
+
+  // flatten the arrow table
+  auto flatten_table = table->CombineChunks(pool).ValueOrDie();
+  auto src_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(0)->chunk(0));
+  auto dst_array = std::dynamic_pointer_cast<arrow::Int64Array>(flatten_table->column(1)->chunk(0));
+  for (int64_t i = 0; i < src_array->length(); ++i) {
+    // if (src_array->Value(i) == 10010) {
+    if (src_array->Value(i) == vertex_id) {
+      set_bit(bit_map, dst_array->Value(i));
+    }
+  }
+}
+
+/*
+void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id, uint64_t* bit_map) {
+  int index = 0, count = 0;  
+  std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
+      parquet::ParquetFileReader::OpenFile(path_to_file, false);
+  // Get the File MetaData
+  std::shared_ptr<parquet::FileMetaData> file_metadata = parquet_reader->metadata();
+  int row_group_count = file_metadata->num_row_groups();
+  int num_columns = file_metadata->num_columns();
+  std::cout << "schema: " << file_metadata->schema()->ToString() << std::endl;
+
+
+  // Iterate over all the RowGroups in the file
+  int col_id = file_metadata->schema()->ColumnIndex("Comment.id");
+  int col_id2 = file_metadata->schema()->ColumnIndex("Tag.id");
+  int64_t src, dst;
+  for (int rg = 0; rg < row_group_count; ++rg) {
+    // Get the RowGroup Reader
+    std::shared_ptr<parquet::RowGroupReader> row_group_reader =
+        parquet_reader->RowGroup(rg);
+
+    int64_t values_read = 0;
+    std::shared_ptr<parquet::ColumnReader> column_reader;
+
+    // Read the label column
+    // Get the Column Reader for the ByteArray column
+    column_reader = row_group_reader->Column(col_id);
+    // parquet::ByteArrayReader* string_reader =
+    //     static_cast<parquet::ByteArrayReader*>(column_reader.get());
+    auto src_reader = std::static_pointer_cast<parquet::Int64Reader>(column_reader);
+    auto dst_reader = std::static_pointer_cast<parquet::Int64Reader>(row_group_reader->Column(col_id2));
+    // Read BATCH_SIZE values at a time. The number of rows read is returned.
+    auto num_row_rg = file_metadata->RowGroup(rg)->num_rows();
+    for (int64_t i = 0; i < num_row_rg; i++) {
+      // check and update results
+      src_reader->ReadBatch(1, nullptr, nullptr, &src, &values_read);
+      dst_reader->ReadBatch(1, nullptr, nullptr, &dst, &values_read);
+      if (src == vertex_id) {
+        set_bit(bit_map, dst);
+      }
+      index++;
+    }
+  }
+}
+*/
 
 void RealWoldWorkLoad(const std::string& path_to_file, uint64_t* bit_map) {
   std::unique_ptr<parquet::ParquetFileReader> reader_ =
@@ -292,16 +376,16 @@ void RunExamples(const std::string& path_to_file, int64_t vertex_num, int64_t ve
   uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
   memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
   int64_t offset = 0, length = 0;
-  getOffset(path_to_file + "-offset", vertex_id, offset, length);
-  std::cout << "offset: " << offset << ", length: " << length << std::endl;
   auto run_start = clock();
-  ReadBitMap(path, offset, length, bit_map);
-  std::cout << "ReadBitMap done" << std::endl;
-  RealWoldWorkLoad("/mnt/ldbc/ldbc-sf10/person_0_0.csv.parquet", bit_map);
-
-  return;
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run time: " << run_time << " ms" << std::endl;
+  auto start = std::chrono::high_resolution_clock::now();
+  getOffset(path_to_file + "-offset", vertex_id, offset, length);
+  std::cout << "offset: " << offset << ", length: " << length << " time: " << run_time << std::endl;
+  ReadBitMap(path, offset, length, bit_map);
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+  std::cout << "First run time: " << duration << " ms" << std::endl;
+  return;
   run_start = clock();
   ReadBitMap(path, offset, length, bit_map);
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
@@ -344,14 +428,17 @@ void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, in
 
 void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
   // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
-  std::string path = path_to_file + "-origin-base";
+  std::string path = path_to_file + ".parquet";
   uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
   memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
   auto run_start = clock();
-  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run time: " << run_time << " ms" << std::endl;
-  run_start = clock();
+  auto start = std::chrono::high_resolution_clock::now();
+  ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+  std::cout << "First run time: " << duration << " ms" << std::endl;
+  return;
   ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();

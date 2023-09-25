@@ -79,7 +79,8 @@ std::shared_ptr<arrow::Table> ExecutePlanAndCollectAsTable(
 std::shared_ptr<arrow::Table> DoHashJoin(
     const std::shared_ptr<arrow::Table>& l_table,
     const std::shared_ptr<arrow::Table>& r_table,
-    const std::string& l_key, const std::string& r_key, const std::string& project_name) {
+    const std::string& l_key, const std::string& r_key, const std::vector<std::string>& l_project_names,
+    const std::vector<std::string>& r_project_names) {
   auto l_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(l_table));
   auto r_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(r_table));
 
@@ -95,7 +96,13 @@ std::shared_ptr<arrow::Table> DoHashJoin(
   r_options->projection = arrow::compute::project({}, {});
 
   auto r_schema = r_dataset->schema();
-  std::vector<arrow::FieldRef> r_output_fields({project_name});
+  std::vector<arrow::FieldRef> l_output_fields, r_output_fields;
+  for (auto& name : l_project_names) {
+    l_output_fields.emplace_back(name.c_str());
+  }
+  for (auto& name : r_project_names) {
+    r_output_fields.emplace_back(name.c_str());
+  }
 
   // construct the scan node
   auto l_scan_node_options = arrow::dataset::ScanNodeOptions{l_dataset, l_options};
@@ -107,7 +114,64 @@ std::shared_ptr<arrow::Table> DoHashJoin(
   arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
                                               /*in_left_keys=*/{l_key},
                                               /*in_right_keys=*/{r_key},
-                                              {},
+                                              l_output_fields,
+                                              r_output_fields,
+                                              /*filter*/ arrow::compute::literal(true),
+                                              /*output_suffix_for_left*/ "_l",
+                                              /*output_suffix_for_right*/ "_r"};
+  arrow::acero::Declaration hashjoin{
+      "hashjoin", {std::move(left), std::move(right)}, join_opts};
+
+  // expected columns l_a, l_b
+  std::shared_ptr<arrow::Table> response_table = arrow::acero::DeclarationToTable(std::move(hashjoin)).ValueOrDie();
+  return response_table;
+}
+
+std::shared_ptr<arrow::Table> DoHashJoin(
+    const std::shared_ptr<arrow::Table>& l_table,
+    const std::string& r_path_to_file,
+    const std::string& l_key, const std::string& r_key, const std::vector<std::string>& l_project_names,
+    const std::vector<std::string>& r_project_names) {
+  auto l_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(l_table));
+  std::shared_ptr<ds::FileFormat> format = std::make_shared<ds::ParquetFileFormat>();
+  auto fs = arrow::fs::FileSystemFromUriOrPath(r_path_to_file).ValueOrDie();
+  auto factory = arrow::dataset::FileSystemDatasetFactory::Make(
+                        fs, {r_path_to_file}, format,
+                        arrow::dataset::FileSystemFactoryOptions()).ValueOrDie();
+  auto r_dataset = factory->Finish().ValueOrDie();
+  // auto r_dataset = std::dynamic_pointer_cast<arrow::dataset::Dataset>(std::make_shared<arrow::dataset::InMemoryDataset>(r_table));
+
+  arrow::dataset::internal::Initialize();
+  auto l_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  l_options->projection = arrow::compute::project({}, {});
+
+  auto r_options = std::make_shared<arrow::dataset::ScanOptions>();
+  // create empty projection: "default" projection where each field is mapped to a
+  // field_ref
+  r_options->projection = arrow::compute::project({}, {});
+
+  auto r_schema = r_dataset->schema();
+  std::vector<arrow::FieldRef> l_output_fields, r_output_fields;
+  for (auto& name : l_project_names) {
+    l_output_fields.emplace_back(name.c_str());
+  }
+  for (auto& name : r_project_names) {
+    r_output_fields.emplace_back(name.c_str());
+  }
+
+  // construct the scan node
+  auto l_scan_node_options = arrow::dataset::ScanNodeOptions{l_dataset, l_options};
+  auto r_scan_node_options = arrow::dataset::ScanNodeOptions{r_dataset, r_options};
+
+  arrow::acero::Declaration left{"scan", std::move(l_scan_node_options)};
+  arrow::acero::Declaration right{"scan", std::move(r_scan_node_options)};
+
+  arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
+                                              /*in_left_keys=*/{l_key},
+                                              /*in_right_keys=*/{r_key},
+                                              l_output_fields,
                                               r_output_fields,
                                               /*filter*/ arrow::compute::literal(true),
                                               /*output_suffix_for_left*/ "_l",
@@ -192,60 +256,8 @@ void ReadBitMap(const std::string& path_to_file, const int64_t& offset, const in
  return;
 }
 
-void ReadBitMapBaseLine(const std::string& path_to_file, const int64_t& offset, const int64_t& length, uint64_t* bit_map) {
-  // #include "arrow/io/api.h"
-  // #include "arrow/parquet/arrow/reader.h"
-  std::unique_ptr<parquet::ParquetFileReader> reader_ =
-      parquet::ParquetFileReader::OpenFile(path_to_file);
-  //int64_t remain_offset = 1316469;
-  //int64_t delta_length = 22846;
-  // int64_t remain_offset = 1888612;
-  // int64_t delta_length = 278490;
-  int64_t remain_offset = offset;
-  auto file_metadata = reader_->metadata();
-  int i = 0;
-  // std::cout << "num_row_groups: " << file_metadata->num_row_groups() << std::endl;
-  while (i < file_metadata->num_row_groups()) {
-    auto row_group_metadata = file_metadata->RowGroup(i);
-    if (remain_offset > row_group_metadata->num_rows()) {
-      remain_offset -= row_group_metadata->num_rows();
-      i++;
-      continue;
-    } else {
-      break;
-    }
-  }
-  // uint64_t* bit_map = new uint64_t[BITMAP_SIZE];
-  int64_t total_values_remaining = length;
-  std::vector<int64_t> values(length);
-  int64_t values_read = 0;
-  auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(1));
-  col_reader->Skip(remain_offset);
-  while (col_reader->HasNext() && total_values_remaining > 0) {
-    col_reader->ReadBatch(total_values_remaining, nullptr, nullptr, values.data() + (length - total_values_remaining), &values_read);
-    total_values_remaining -= values_read;
-  }
-  while (total_values_remaining > 0) {
-    col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(1));
-    while (col_reader->HasNext() && total_values_remaining > 0) {
-      col_reader->ReadBatch(total_values_remaining, nullptr, nullptr, values.data() + (length - total_values_remaining), &values_read);
-      total_values_remaining -= values_read;
-    }
-  }
-  for (int64_t i = 0; i < length; ++i) {
-    set_bit(bit_map, values[i]);
-    /*
-    auto index = static_cast<uint64_t>(values[i]);
-    if (!(bit_map[index >> 6] & (1UL << (index & 63)))) {
-      throw std::runtime_error("Bit map is not correct");
-    }
-    */
-  }
-
-  return;
-}
-
-std::shared_ptr<arrow::Table> ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& vertex_id) {
+std::shared_ptr<arrow::Table> GetMessages(const std::string& path_to_file, const int64_t& vertex_id, 
+    const std::string& target_col, const std::string& project_col) {
   std::shared_ptr<ds::FileFormat> format = std::make_shared<ds::ParquetFileFormat>();
   auto fs = arrow::fs::FileSystemFromUriOrPath(path_to_file).ValueOrDie();
   auto factory = arrow::dataset::FileSystemDatasetFactory::Make(
@@ -254,20 +266,21 @@ std::shared_ptr<arrow::Table> ReadBitMapBaseLineNoOffset(const std::string& path
   auto dataset = factory->Finish().ValueOrDie();
   auto options = std::make_shared<arrow::dataset::ScanOptions>();
 
-  cp::Expression filter_expr = cp::equal(cp::field_ref("src"), cp::literal(vertex_id));
+  cp::Expression filter_expr = cp::equal(cp::field_ref(target_col), cp::literal(vertex_id));
   options->filter = filter_expr;
   auto scan_builder = dataset->NewScan().ValueOrDie();
-  scan_builder->Project({"dst"});
+  scan_builder->Project({project_col});
   scan_builder->Filter(std::move(filter_expr));
   scan_builder->UseThreads(false);
   auto scanner = scan_builder->Finish().ValueOrDie();
   return scanner->ToTable().ValueOrDie();
 }
 
-std::shared_ptr<arrow::Table> SortOperation(const std::shared_ptr<arrow::Table>& table) {
+std::shared_ptr<arrow::Table> SortOperation(const std::shared_ptr<arrow::Table>& table,
+    const std::string& first_key, const std::string& second_key) {
   std::vector<arrow::compute::SortKey> sort_keys;
-  sort_keys.emplace_back("friendshipCreationDate", arrow::compute::SortOrder::Descending);
-  sort_keys.emplace_back("personId", arrow::compute::SortOrder::Ascending);
+  sort_keys.emplace_back(first_key, arrow::compute::SortOrder::Descending);
+  sort_keys.emplace_back(second_key, arrow::compute::SortOrder::Ascending);
   arrow::compute::SortOptions sort_options(sort_keys);
   auto exec_context = arrow::compute::default_exec_context();
   auto plan = arrow::acero::ExecPlan::Make(exec_context).ValueOrDie();
@@ -286,11 +299,12 @@ std::shared_ptr<arrow::Table> SortOperation(const std::shared_ptr<arrow::Table>&
                                       table->schema(), sink_gen);
 }
 
+/*
 std::shared_ptr<arrow::Table> SelectOptimize(const std::string& path_to_file, uint64_t* bit_map) {
   arrow::Int64Builder _id_builder;
   arrow::StringBuilder _first_name_builder;
   arrow::StringBuilder _last_name_builder;
-  arrow::Int64Builder _creation_date_builder;
+  arrow::Int16Builder _index_builder;
 
   int index = 0, count = 0;  
   std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
@@ -310,7 +324,6 @@ std::shared_ptr<arrow::Table> SelectOptimize(const std::string& path_to_file, ui
   int col_id = file_metadata->schema()->ColumnIndex("id");
   int col_id2 = file_metadata->schema()->ColumnIndex("firstName");
   int col_id3 = file_metadata->schema()->ColumnIndex("lastName");
-  int col_id4 = file_metadata->schema()->ColumnIndex("creationDate");
   int64_t value;
   for (int rg = 0; rg < row_group_count; ++rg) {
     // Get the RowGroup Reader
@@ -328,25 +341,22 @@ std::shared_ptr<arrow::Table> SelectOptimize(const std::string& path_to_file, ui
     auto id_reader = std::static_pointer_cast<parquet::Int64Reader>(column_reader);
     auto first_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id2));
     auto last_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id3));
-    auto creation_date_reader = std::static_pointer_cast<parquet::Int64Reader>(row_group_reader->Column(col_id4));
     // Read BATCH_SIZE values at a time. The number of rows read is returned.
     auto num_row_rg = file_metadata->RowGroup(rg)->num_rows();
     int64_t last_i = 0;
     for (int64_t i = 0; i < num_row_rg; i++) {
       // check and update results
       if ((bit_map[index >> 6] & (1UL << (index & 63)))) {
+        _index_builder.Append(index);
         id_reader->Skip(i - last_i);
         first_name_reader->Skip(i - last_i);
         last_name_reader->Skip(i - last_i);
-        creation_date_reader->Skip(i - last_i);
         id_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
         _id_builder.Append(value);
         first_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
         _first_name_builder.Append(std::string((char*)byte_value[0].ptr, byte_value[0].len));
         last_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
         _last_name_builder.Append(std::string((char*)byte_value[0].ptr, byte_value[0].len));
-        creation_date_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
-        _creation_date_builder.Append(value);
         last_i = i + 1;
         count++;
       }
@@ -356,18 +366,115 @@ std::shared_ptr<arrow::Table> SelectOptimize(const std::string& path_to_file, ui
 
   delete[] byte_value;
 
-  std::shared_ptr<arrow::Array> _id_array, _first_name_array, _last_name_array, _creation_date_array;
+  std::shared_ptr<arrow::Array> _id_array, _first_name_array, _last_name_array, _index_array;
   _id_builder.Finish(&_id_array);
   _first_name_builder.Finish(&_first_name_array);
   _last_name_builder.Finish(&_last_name_array);
-  _creation_date_builder.Finish(&_creation_date_array);
+  _index_builder.Finish(&_index_array);
   std::vector<std::shared_ptr<arrow::Field>> schema_vector = {
       arrow::field("personId", arrow::int64()),
       arrow::field("firstName", arrow::utf8()),
       arrow::field("lastName", arrow::utf8()),
-      arrow::field("friendshipCreationDate", arrow::int64())};
+      arrow::field("index", arrow::int64())};
   auto schema = std::make_shared<arrow::Schema>(schema_vector);
-  return arrow::Table::Make(schema, {_id_array, _first_name_array, _last_name_array, _creation_date_array});
+  return arrow::Table::Make(schema, {_id_array, _first_name_array, _last_name_array, _index_array});
+}
+*/
+
+std::shared_ptr<arrow::Table> SelectOptimize(const std::string& path_to_file, uint64_t* bit_map) {
+  arrow::Int64Builder _id_builder, _creation_date_builder, _person_id_builder;
+  arrow::StringBuilder _content_builder, _first_name_builder, _last_name_builder;
+
+  int index = 0, count = 0;  
+  std::unique_ptr<parquet::ParquetFileReader> parquet_reader =
+      parquet::ParquetFileReader::OpenFile(path_to_file, false);
+  // Get the File MetaData
+  std::shared_ptr<parquet::FileMetaData> file_metadata = parquet_reader->metadata();
+  int row_group_count = file_metadata->num_row_groups();
+  int num_columns = file_metadata->num_columns();
+
+  // char* char_buffer = new char[total_length];
+  // int64_t *values = new int64_t[BATCH_SIZE];
+  // parquet::ByteArray* byte_values = new parquet::ByteArray[BATCH_SIZE];
+  parquet::ByteArray* byte_value = new parquet::ByteArray[1];
+  // memset(values, 0, sizeof(int64_t) * BATCH_SIZE);
+
+  // Iterate over all the RowGroups in the file
+  int col_id = file_metadata->schema()->ColumnIndex("id");
+  int col_id2 = file_metadata->schema()->ColumnIndex("content");
+  int col_id3 = file_metadata->schema()->ColumnIndex("creationDate");
+  int col_id4 = file_metadata->schema()->ColumnIndex("personId");
+  int col_id5 = file_metadata->schema()->ColumnIndex("firstName");
+  int col_id6 = file_metadata->schema()->ColumnIndex("secondName");
+  int64_t value;
+  for (int rg = 0; rg < row_group_count; ++rg) {
+    // Get the RowGroup Reader
+    std::shared_ptr<parquet::RowGroupReader> row_group_reader =
+        parquet_reader->RowGroup(rg);
+
+    int64_t values_read = 0;
+    std::shared_ptr<parquet::ColumnReader> column_reader;
+
+    // Read the label column
+    // Get the Column Reader for the ByteArray column
+    column_reader = row_group_reader->Column(col_id);
+    // parquet::ByteArrayReader* string_reader =
+    //     static_cast<parquet::ByteArrayReader*>(column_reader.get());
+    auto id_reader = std::static_pointer_cast<parquet::Int64Reader>(column_reader);
+    auto content_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id2));
+    auto creation_date_reader = std::static_pointer_cast<parquet::Int64Reader>(row_group_reader->Column(col_id3));
+    auto person_id_reader = std::static_pointer_cast<parquet::Int64Reader>(row_group_reader->Column(col_id4));
+    auto first_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id5));
+    auto last_name_reader = std::static_pointer_cast<parquet::ByteArrayReader>(row_group_reader->Column(col_id6));
+    // Read BATCH_SIZE values at a time. The number of rows read is returned.
+    auto num_row_rg = file_metadata->RowGroup(rg)->num_rows();
+    int64_t last_i = 0;
+    for (int64_t i = 0; i < num_row_rg; i++) {
+      // check and update results
+      if ((bit_map[index >> 6] & (1UL << (index & 63)))) {
+        id_reader->Skip(i - last_i);
+        content_reader->Skip(i - last_i);
+        person_id_reader->Skip(i - last_i);
+        creation_date_reader->Skip(i - last_i);
+        first_name_reader->Skip(i - last_i);
+        last_name_reader->Skip(i - last_i);
+        id_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
+        _id_builder.Append(value);
+        content_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        _content_builder.Append(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+        person_id_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
+        _person_id_builder.Append(value);
+        creation_date_reader->ReadBatch(1, nullptr, nullptr, &value, &values_read);
+        _creation_date_builder.Append(value);
+        first_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        _first_name_builder.Append(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+        last_name_reader->ReadBatch(1, nullptr, nullptr, byte_value, &values_read);
+        _last_name_builder.Append(std::string((char*)byte_value[0].ptr, byte_value[0].len));
+        last_i = i + 1;
+        count++;
+      }
+      index++;
+    }
+  }
+
+  delete[] byte_value;
+
+  std::shared_ptr<arrow::Array> _id_array, _content_array, _person_id_array, _creation_date_array, _first_name_array, _last_name_array;
+  _id_builder.Finish(&_id_array);
+  _content_builder.Finish(&_content_array);
+  _person_id_builder.Finish(&_person_id_array);
+  _creation_date_builder.Finish(&_creation_date_array);
+  _first_name_builder.Finish(&_first_name_array);
+  _last_name_builder.Finish(&_last_name_array);
+  std::vector<std::shared_ptr<arrow::Field>> schema_vector = {
+      arrow::field("Comment.id", arrow::int64()),
+      arrow::field("content", arrow::utf8()),
+      arrow::field("creationDate", arrow::int64()),
+      arrow::field("personId", arrow::int64()),
+      arrow::field("firstName", arrow::utf8()),
+      arrow::field("lastName", arrow::utf8())};
+  auto schema = std::make_shared<arrow::Schema>(schema_vector);
+  return arrow::Table::Make(schema, {_id_array, _content_array, _creation_date_array, _person_id_array, _first_name_array, _last_name_array});
 }
 
 std::shared_ptr<arrow::Table> Select(const std::unordered_set<int64_t>& ids, const std::string& path_to_table) {
@@ -482,133 +589,111 @@ std::shared_ptr<arrow::Table> Select(const std::unordered_set<int64_t>& ids, con
   return arrow::Table::Make(schema, {_id_array, _first_name_array, _last_name_array, _creation_date_array});
 }
 
-void RunExamples(const std::string& path_to_file, const std::string& vertex_path_to_file, int64_t vertex_num, int64_t vertex_id) {
-  std::string path = path_to_file + "-delta";
-  uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
-  memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
+void IC8_GRAPHAR(
+  int64_t vertex_id,
+  int64_t vertex_num_post,
+  int64_t vertex_num_comment,
+  int64_t vertex_num_person, 
+  const std::string& post_has_creator_person_path_file,
+  const std::string& comment_has_creator_person_path_file,
+  const std::string& comment_replyof_post_path_file,
+  const std::string& comment_replyof_comment_path_file,
+  const std::string& comment_path_file,
+  const std::string& person_path_file) {
+  int64_t post_length = vertex_num_post / 64 + 1;
+  int64_t comment_length = vertex_num_comment / 64 + 1;
+  uint64_t* bit_map_post = new uint64_t[vertex_num_post / 64 + 1];
+  uint64_t* bit_map_comment = new uint64_t[vertex_num_comment / 64 + 1];
+  uint64_t* bit_map = new uint64_t[vertex_num_comment / 64 + 1];
+  memset(bit_map_post, 0, sizeof(uint64_t) * (vertex_num_post / 64 + 1));
+  memset(bit_map_comment, 0, sizeof(uint64_t) * (vertex_num_comment / 64 + 1));
+  memset(bit_map, 0, sizeof(uint64_t) * (vertex_num_comment / 64 + 1));
   int64_t offset = 0, length = 0;
-  getOffset(path_to_file + "-offset", vertex_id, offset, length);
-  std::cout << "offset: " << offset << ", length: " << length << std::endl;
   auto run_start = clock();
-  ReadBitMap(path, offset, length, bit_map);
-  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run time: " << run_time << " ms" << std::endl;
-  run_start = clock();
-  ReadBitMap(path, offset, length, bit_map);
-  auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  ReadBitMap(path, offset, length, bit_map);
-  auto run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  ReadBitMap(path, offset, length, bit_map);
-  auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average run time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
+  getOffset(post_has_creator_person_path_file + "-offset", vertex_id, offset, length);
+  ReadBitMap(post_has_creator_person_path_file + "-delta", offset, length, bit_map_post);
+  getOffset(comment_has_creator_person_path_file + "-offset", vertex_id, offset, length);
+  ReadBitMap(comment_has_creator_person_path_file + "-delta", offset, length, bit_map_comment);
 
-  std::shared_ptr<arrow::Table> table, sorted_table;
-  run_start = clock();
-  table = SelectOptimize(vertex_path_to_file, bit_map);
-  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  std::cout << "First project time: " << run_time << " ms" << std::endl;
-  run_start = clock();
-  table = SelectOptimize(vertex_path_to_file, bit_map);
-  run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  run_start = clock();
-  table = SelectOptimize(vertex_path_to_file, bit_map);
-  run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  run_start = clock();
-  table = SelectOptimize(vertex_path_to_file, bit_map);
-  run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  sorted_table = SortOperation(table);
-  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average project time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
-  std::cout << "sorted time: " << run_time << std::endl;
-  // std::cout << "sorted table: " << sorted_table->ToString() << std::endl;
-  delete[] bit_map;
-  // return;
-}
-
-void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
-  std::string path = path_to_file + "-base";
-  // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
-  uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
-  memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
-  int64_t offset = 0, length = 0;
-  getOffset(path_to_file + "-offset", vertex_id, offset, length);
-  std::cout << "offset: " << offset << ", length: " << length << std::endl;
-  auto run_start = clock();
-  ReadBitMapBaseLine(path, offset, length, bit_map);
-  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run time: " << run_time << " ms" << std::endl;
-  run_start = clock();
-  ReadBitMapBaseLine(path, offset, length, bit_map);
-  auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  ReadBitMapBaseLine(path, offset, length, bit_map);
-  auto run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  ReadBitMapBaseLine(path, offset, length, bit_map);
-  auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average run time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
-  delete[] bit_map;
-  return;
-}
-
-void RunExamplesBaseLineNoOffset(const std::string& path_to_file, const std::string& vertex_path_to_file, int64_t vertex_num, int64_t vertex_id) {
-  std::string path = path_to_file + "-origin-base";
-  std::shared_ptr<arrow::Table> table;
-  auto run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
-  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "First run get bit map time: " << run_time << " ms" << std::endl;
-  run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
-  auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
-  auto run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  run_start = clock();
-  table = ReadBitMapBaseLineNoOffset(path, vertex_id);
-  auto run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average run get bit map time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
-
-  std::unordered_set<int64_t> ids;
-  auto chunked_array = table->column(0);
-  auto chunk_num = chunked_array->num_chunks();
-  for (int i = 0; i < chunk_num; ++i) {
-    auto array = static_cast<arrow::Int64Array*>(chunked_array->chunk(i).get());
-    for (int j = 0; j < array->length(); ++j) {
-      ids.insert(array->GetView(j));
+  uint64_t bit_map_post_i;
+  int64_t index;
+  int bit_offset;
+  for (int64_t i = 0; i < post_length; ++i) {
+    bit_map_post_i = bit_map_post[i];
+    index = i * 64;
+    while (bit_map_post_i) {
+      bit_offset = __builtin_ctzll(bit_map_post[i]);
+      index += bit_offset;
+      getOffset(comment_replyof_post_path_file + "-offset", index, offset, length);
+      ReadBitMap(comment_replyof_post_path_file + "-delta", offset, length, bit_map);
+      bit_map_post_i = (bit_map_post_i >> bit_offset) >> 1;
+      index += 1;
     }
   }
-  std::cout << "size: " << ids.size() << std::endl;
-  table.reset();
+  uint64_t bit_map_comment_i;
+  for (int64_t i = 0; i < comment_length; ++i) {
+    bit_map_comment_i = bit_map_comment[i];
+    index = i * 64;
+    while (bit_map_comment_i) {
+      bit_offset = __builtin_ctzll(bit_map_comment_i);
+      index += bit_offset;
+      getOffset(comment_replyof_comment_path_file + "-offset", index, offset, length);
+      ReadBitMap(comment_replyof_comment_path_file + "-delta", offset, length, bit_map);
+      bit_map_comment_i = (bit_map_comment_i >> bit_offset) >> 1;
+      ++index;
+    }
+  }
 
-  std::shared_ptr<arrow::Table> sorted_table;
-  run_start = clock();
-  table = Select(ids, vertex_path_to_file);
-  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  std::cout << "First run project time: " << run_time << " ms" << std::endl;
-  run_start = clock();
-  table = Select(ids, vertex_path_to_file);
-  run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  run_start = clock();
-  table = Select(ids, vertex_path_to_file);
-  run_time_2 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  table.reset();
-  run_start = clock();
-  table = Select(ids, vertex_path_to_file);
-  run_time_3 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "Average run project time: " << (run_time_1 + run_time_2 + run_time_3) / 3 << " ms" << std::endl;
-  run_start = clock();
-  sorted_table = SortOperation(table);
-  run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "sorted time: " << run_time << std::endl;
+  auto comment_property_table = SelectOptimize(comment_path_file, bit_map);
+  auto sorted_table = SortOperation(comment_property_table, "creationDate", "Comment.id")->Slice(0, 20);
+  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "sort time: " << run_time << " ms" << std::endl;
+  // auto person_property_table = SelectOptimize(person_path_file, bit_map_person);
+  // std::cout << "person row num: " << person_property_table->num_rows() << std::endl;
+  
+  // auto result = DoHashJoin(person_property_table, comment_property_table, "index", "Person.Index", {"personId", "firstName", "lastName"}, {"Comment.id", "creationDate", "content"});
+  // std::cout << "row num: " << result->num_rows() << std::endl;
+  // std::cout << "table: " << result->ToString() << std::endl;
+  // Can optimize as select
+  // std::unordered_map<int64_t, int64_t> person_to_comment;
+  // for (int64_t i = 0; i < vertex_num_comment; ++i) {
+  //   if ((bit_map[i >> 6] & (1UL << (i & 63)))) {
+  //     ReadBitMap(comment_has_creator_person_path_file + "-delta", i, 1, bit_map_person);
+  //   }
+  // }
+
+  // auto comment_property_table = SelectOptimize(comment_path_file, bit_map);
+  // auto person_property_table = SelectOptimize(person_path_file, person_to_comment, bit_map_person);
+}
+
+void IC8_ACERO(
+  int64_t vertex_id,
+  const std::string& post_has_creator_person_path_file,
+  const std::string& comment_has_creator_person_path_file,
+  const std::string& comment_replyof_post_path_file,
+  const std::string& comment_replyof_comment_path_file,
+  const std::string& comment_path_file,
+  const std::string& person_path_file) {
+  auto post_table = GetMessages(post_has_creator_person_path_file + ".parquet", vertex_id, "Person.id", "Post.id");
+  auto comment_table = GetMessages(comment_has_creator_person_path_file + ".parquet", vertex_id, "Person.id", "Comment.id");
+
+  auto comment_table_1 = DoHashJoin(post_table, comment_replyof_post_path_file + ".parquet", "Post.id", "Post.id", {}, {"Comment.id"});
+  auto comment_table_2 = DoHashJoin(comment_table, comment_replyof_comment_path_file + ".parquet", "Comment.id", "Comment.id2", {}, {"Comment.id"});
+
+  auto all_comment_table = arrow::ConcatenateTables({comment_table_1, comment_table_2}).ValueOrDie();
+
+  auto person_table = DoHashJoin(all_comment_table, comment_has_creator_person_path_file + ".parquet", "Comment.id", "Comment.id", {}, {"Comment.id", "Person.id"});
+
+  // Or Select
+  auto comment_property_table = DoHashJoin(all_comment_table, comment_path_file, "Comment.id", "id", {"Comment.id"}, {"creationDate", "content"});
+
+  // Or Select
+  auto person_property_table = DoHashJoin(person_table, person_path_file, "Person.id", "id", {"Comment.id"}, {"id", "firstName", "lastName"});
+
+  auto result = DoHashJoin(person_property_table, comment_property_table, "Comment.id", "Comment.id", {"id", "firstName", "lastName"}, {"Comment.id", "creationDate", "content"});
+
+  auto sorted_table = SortOperation(result, "creationDate", "Comment.id")->Slice(0, 20);
+
   return;
 } 
 
@@ -618,20 +703,25 @@ int main(int argc, char** argv) {
     return EXIT_SUCCESS;
   }
 
-  std::string path_to_file = argv[1];
-  std::string vertex_path_file = argv[2];
-  int64_t vertex_num = std::stol(argv[3]);
-  int64_t vertex_id = std::stol(argv[4]);
-  std::cout << "path_to_file: " << path_to_file << " vertex_num: " << vertex_num << " vertex_id: " << vertex_id << std::endl;
+  std::string post_has_creator_person_path_file = argv[1];
+  std::string comment_has_creator_person_path_file = argv[2];
+  std::string comment_replyof_post_path_file = argv[3];
+  std::string comment_replyof_comment_path_file = argv[4];
+  std::string comment_path_file = argv[5];
+  std::string person_path_file = argv[6];
+  int64_t vertex_id = std::stol(argv[7]);
+  int64_t vertex_num_post = std::stol(argv[8]);
+  int64_t vertex_num_comment = std::stol(argv[9]);
+  int64_t vertex_num_person = std::stol(argv[10]);
+  /*
+  auto run_start = clock();
+  IC8_ACERO(vertex_id, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
+  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  std::cout << "run time: " << run_time << "ms" << std::endl;
+  */
+  IC8_GRAPHAR(vertex_id, vertex_num_post, vertex_num_comment, vertex_num_person, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
   // CheckCorrectness(path_to_file, vertex_num, vertex_id);
   // return 0;
-  std::string type = argv[5];  
-  if (type == "delta") {
-    RunExamples(path_to_file, vertex_path_file, vertex_num, vertex_id);
-  } else {
-    RunExamplesBaseLineNoOffset(path_to_file, vertex_path_file, vertex_num, vertex_id);
-  }
-
   // if (!status.ok()) {
   //  std::cerr << "Error occurred: " << status.message() << std::endl;
   //  return EXIT_FAILURE;
