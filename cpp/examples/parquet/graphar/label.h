@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#ifndef PARQUET_EXAMPLES_GRAPHAR_LABEL_H
+#define PARQUET_EXAMPLES_GRAPHAR_LABEL_H
+
 #include <arrow/io/file.h>
 #include <arrow/util/logging.h>
 #include <parquet/api/reader.h>
@@ -22,6 +25,7 @@
 #include <parquet/properties.h>
 
 #include <iostream>
+#include <set>
 #include <vector>
 
 using parquet::ConvertedType;
@@ -32,20 +36,22 @@ using parquet::schema::GroupNode;
 using parquet::schema::PrimitiveNode;
 
 /// constants related to encoding and decoding of the labels
-constexpr int MAX_LABEL_NUM = 16;         // the maximum number of labels
-constexpr int MAX_DECODED_NUM = 5000000;  // the maximum number of decoded values
+constexpr int MAX_LABEL_NUM = 100;         // the maximum number of labels
+constexpr int MAX_DECODED_NUM = 100000;  // the maximum number of decoded values
 /// constants related to the parquet file
-constexpr int NUM_ROWS_PER_ROW_GROUP = 1024 * 16;  // the number of rows per row group
-constexpr int BATCH_SIZE = 1024;                   // the batch size
+constexpr int NUM_ROWS_PER_ROW_GROUP = 1024 * 1024;  // the number of rows per row group
+constexpr int BATCH_SIZE = 1024;                     // the batch size
+constexpr int THRESHOLD = 10;                        // the threshold to num_vertices/10
 // kDefaultDataPageSize = 1024 * 1024
 // DEFAULT_WRITE_BATCH_SIZE = 1024
 // DEFAULT_MAX_ROW_GROUP_LENGTH = 1024 * 1024
 
 /// The query type
 enum QUERY_TYPE {
-  COUNT,  // return the number of valid vertices
-  INDEX,  // return the indices of valid vertices
-  BITMAP  // return the bitmap of valid vertices
+  COUNT,    // return the number of valid vertices
+  INDEX,    // return the indices of valid vertices
+  BITMAP,   // return the bitmap of valid vertices
+  ADAPTIVE  // adaptively return indices or bitmap
 };
 
 /// Set bit
@@ -72,90 +78,55 @@ static inline bool GetBit(const uint64_t* bitmap, const int index) {
   return (bitmap[index >> 6]) & (1ULL << (index & 63));
 }
 
-/// Setup the schema of the parquet file
-static std::shared_ptr<GroupNode> SetupSchema(const int label_num,
-                                              const std::string* label_names,
-                                              const bool contain_id_column) {
-  parquet::schema::NodeVector fields;
-
-  // Add label_num primitive nodes with specific names to the group node
-  for (int i = 0; i < label_num; ++i) {
-    // Create a primitive node with type:BOOLEAN, repetition:REQUIRED
-    if (label_names == nullptr) {
-      fields.push_back(PrimitiveNode::Make("label_" + std::to_string(i),
-                                           Repetition::REQUIRED, Type::BOOLEAN,
-                                           ConvertedType::NONE));
-    } else {
-      fields.push_back(PrimitiveNode::Make(label_names[i], Repetition::REQUIRED,
-                                           Type::BOOLEAN, ConvertedType::NONE));
-    }
-  }
-
-  if (contain_id_column) {
-    // Create a primitive node named 'id' with type:INT64, repetition:REQUIRED,
-    fields.push_back(PrimitiveNode::Make("id", Repetition::REQUIRED, Type::INT64,
-                                         ConvertedType::NONE));
-  }
-
-  // Create a GroupNode named 'schema' using the primitive nodes defined above
-  // This GroupNode is the root node of the schema tree
-  return std::static_pointer_cast<GroupNode>(
-      GroupNode::Make("schema", Repetition::REQUIRED, fields));
-}
-
-/// Setup the schema of the parquet file, using string array to store labels
-static std::shared_ptr<GroupNode> SetupSchema(const bool contain_id_column) {
-  parquet::schema::NodeVector fields;
-
-  // Create a primitive node with type:BOOLEAN, repetition:REQUIRED
-  fields.push_back(PrimitiveNode::Make("labels", Repetition::REQUIRED, Type::BYTE_ARRAY,
-                                       ConvertedType::NONE));
-
-  if (contain_id_column) {
-    // Create a primitive node named 'id' with type:INT64, repetition:REQUIRED,
-    fields.push_back(PrimitiveNode::Make("id", Repetition::REQUIRED, Type::INT64,
-                                         ConvertedType::NONE));
-  }
-
-  // Create a GroupNode named 'schema' using the primitive nodes defined above
-  // This GroupNode is the root node of the schema tree
-  return std::static_pointer_cast<GroupNode>(
-      GroupNode::Make("schema", Repetition::REQUIRED, fields));
-}
-
 /// Get the valid intervals of the labels, "column_number" is the number of columns
-static int GetValidIntervals(const int column_number, const int row_number,
-                             int32_t repeated_nums[][MAX_DECODED_NUM],
-                             bool repeated_values[][MAX_DECODED_NUM], int32_t* length,
-                             const std::function<bool(bool*, int)>& IsValid,
-                             std::vector<int>* indices = nullptr,
-                             uint64_t* bitmap = nullptr,
-                             const QUERY_TYPE query_type = COUNT) {
+static inline int GetValidIntervals(const int column_number, const int row_number,
+                                    int32_t repeated_nums[][MAX_DECODED_NUM],
+                                    bool repeated_values[][MAX_DECODED_NUM],
+                                    int32_t* length,
+                                    const std::function<bool(bool*, int)>& IsValid,
+                                    std::vector<int>* indices = nullptr,
+                                    uint64_t* bitmap = nullptr,
+                                    const QUERY_TYPE query_type = COUNT) {
   // initialization
-  std::vector<std::pair<int, int> > intervals;
-  int current_pos = 0, previous_pos = 0, count = 0;
+  int current_pos = 0, previous_pos = 0, count = 0, min_pos;
   int pos[MAX_LABEL_NUM] = {0};
   int index[MAX_LABEL_NUM] = {0};
   bool state[MAX_LABEL_NUM];
   for (int i = 0; i < column_number; ++i) {
     state[i] = repeated_values[i][index[i]];
   }
+  std::vector<int> interval;
+  bool state_change = true, last_res = false;
 
   // K-path merging
   while (true) {
     // find the minimum position of change
-    int min_pos = INT32_MAX;
+    min_pos = INT32_MAX;
     for (int i = 0; i < column_number; ++i) {
-      if (index[i] < length[i] && pos[i] + repeated_nums[i][index[i]] < min_pos) {
-        min_pos = pos[i] + repeated_nums[i][index[i]];
+      if (index[i] < length[i]) {
+        min_pos = std::min(min_pos, pos[i] + repeated_nums[i][index[i]]);
       }
+    }
+    if (min_pos == INT32_MAX) {
+      // std::cout << length[0] << " " << pos[0] << " " << index[0] << std::endl;
     }
     // check the last interval and add it to the result if it is valid
     previous_pos = current_pos;
     current_pos = min_pos;
-    if (IsValid(state, column_number)) {
+    if (state_change) {
+      last_res = IsValid(state, column_number);
+      state_change = false;
+    }
+    if (last_res) {
       count += current_pos - previous_pos;
-      if (query_type == INDEX) {
+      if (query_type == ADAPTIVE) {
+        if (interval.size() > 0 && interval.back() == previous_pos) {
+          interval[interval.size() - 1] = current_pos;  // merge the intervals
+        } else {
+          interval.push_back(previous_pos);
+          interval.push_back(current_pos);
+        }
+      } else if (query_type == INDEX) {
         for (int i = previous_pos; i < current_pos; ++i) {
           indices->push_back(i);
         }
@@ -173,8 +144,24 @@ static int GetValidIntervals(const int column_number, const int row_number,
         pos[i] = min_pos;
         index[i]++;
         if (index[i] < length[i]) {
+          state_change |= (state[i] != repeated_values[i][index[i]]);
           state[i] = repeated_values[i][index[i]];
         }
+      }
+    }
+  }
+
+  if (query_type == ADAPTIVE) {
+    size_t m = interval.size();
+    if (count < row_number / THRESHOLD) {  // sparse mode
+      for (size_t i = 0; i < m; i += 2) {
+        for (int j = interval[i]; j < interval[i + 1]; j++) {
+          indices->push_back(j);
+        }
+      }
+    } else {  // dense mode
+      for (size_t i = 0; i < m; i += 2) {
+        SetBitmap(bitmap, interval[i], interval[i + 1]);
       }
     }
   }
@@ -199,7 +186,14 @@ int read_parquet_file_and_get_valid_intervals(
     const char* parquet_filename, const int row_num, const int tot_label_num,
     const int tested_label_num, const int* tested_label_ids,
     int32_t repeated_nums[][MAX_DECODED_NUM], bool repeated_values[][MAX_DECODED_NUM],
-    int32_t* true_num, int32_t* false_num, int32_t* length,
+    int32_t* length, const std::function<bool(bool*, int)>& IsValid,
+    std::vector<int>* indices = nullptr, uint64_t* bitmap = nullptr,
+    const QUERY_TYPE query_type = COUNT);
+
+int read_parquet_file_and_get_valid_intervals_2(
+    const char* parquet_filename, const int row_num, const int tot_label_num,
+    const int tested_label_num, const int* tested_label_ids, int32_t* repeated_nums,
+    bool* repeated_values, int32_t* length,
     const std::function<bool(bool*, int)>& IsValid, std::vector<int>* indices = nullptr,
     uint64_t* bitmap = nullptr, const QUERY_TYPE query_type = COUNT);
 
@@ -222,9 +216,115 @@ void generate_parquet_file_bool_RLE(const char* parquet_filename, const int row_
                                     const std::string* label_names = nullptr,
                                     const bool contain_id_column = true);
 
+void generate_parquet_file_string_2(const char* parquet_filename, const int row_num,
+                                    const int label_num, std::set<int32_t> has_labels[],
+                                    const std::string* label_names = nullptr,
+                                    const bool contain_id_column = true,
+                                    const bool enable_dictionary = false);
+
+void generate_parquet_file_bool_RLE_2(const char* parquet_filename, const int row_num,
+                                      const int label_num, std::set<int32_t> has_labels[],
+                                      const std::string* label_names = nullptr,
+                                      const bool contain_id_column = true);
+
 /// !!! This is only used for debug
-static inline void validate_column(const int col_id, const int row_num,
+/* static inline void validate_column(const int col_id, const int row_num,
                                    int32_t repeated_nums[][MAX_DECODED_NUM],
                                    bool repeated_values[][MAX_DECODED_NUM],
-                                   int32_t* true_num, int32_t* false_num,
-                                   int32_t* length);
+                                   int32_t* length); */
+
+/// Get the valid intervals of the labels, "column_number" is the number of columns
+static inline int GetValidIntervals2(const int column_number, const int row_number,
+                                     int32_t* repeated_nums, bool* repeated_values,
+                                     int32_t* length,
+                                     const std::function<bool(bool*, int)>& IsValid,
+                                     std::vector<int>* indices = nullptr,
+                                     uint64_t* bitmap = nullptr,
+                                     const QUERY_TYPE query_type = COUNT) {
+  if (column_number != 1) {
+    std::cout << "Error: column_number != 1" << std::endl;
+    return -1;
+  }
+  // initialization
+  int current_pos = 0, previous_pos = 0, count = 0, min_pos;
+  int pos[MAX_LABEL_NUM] = {0};
+  int index[MAX_LABEL_NUM] = {0};
+  bool state[MAX_LABEL_NUM];
+  for (int i = 0; i < column_number; ++i) {
+    state[i] = repeated_values[index[i]];
+  }
+  std::vector<int> interval;
+  bool state_change = true, last_res = false;
+
+  // K-path merging
+  while (true) {
+    // find the minimum position of change
+    min_pos = INT32_MAX;
+    for (int i = 0; i < column_number; ++i) {
+      if (index[i] < length[i]) {
+        min_pos = std::min(min_pos, pos[i] + repeated_nums[index[i]]);
+      }
+    }
+    if (min_pos == INT32_MAX) {
+      // std::cout << length[0] << " " << pos[0] << " " << index[0] << std::endl;
+    }
+    // check the last interval and add it to the result if it is valid
+    previous_pos = current_pos;
+    current_pos = min_pos;
+    if (state_change) {
+      last_res = IsValid(state, column_number);
+      state_change = false;
+    }
+    if (last_res) {
+      count += current_pos - previous_pos;
+      if (query_type == ADAPTIVE) {
+        if (interval.size() > 0 && interval.back() == previous_pos) {
+          interval[interval.size() - 1] = current_pos;  // merge the intervals
+        } else {
+          interval.push_back(previous_pos);
+          interval.push_back(current_pos);
+        }
+      } else if (query_type == INDEX) {
+        for (int i = previous_pos; i < current_pos; ++i) {
+          indices->push_back(i);
+        }
+      } else if (query_type == BITMAP) {
+        SetBitmap(bitmap, previous_pos, current_pos);
+      }
+    }
+    // if current position is N, break the loop
+    if (min_pos == row_number) {
+      break;
+    }
+    // update the states
+    for (int i = 0; i < column_number; ++i) {
+      if (index[i] < length[i] && pos[i] + repeated_nums[index[i]] == min_pos) {
+        pos[i] = min_pos;
+        index[i]++;
+        if (index[i] < length[i]) {
+          state_change |= (state[i] != repeated_values[index[i]]);
+          state[i] = repeated_values[index[i]];
+        }
+      }
+    }
+  }
+
+  if (query_type == ADAPTIVE) {
+    size_t m = interval.size();
+    if (count < row_number / THRESHOLD) {  // sparse mode
+      for (size_t i = 0; i < m; i += 2) {
+        for (int j = interval[i]; j < interval[i + 1]; j++) {
+          indices->push_back(j);
+        }
+      }
+    } else {  // dense mode
+      for (size_t i = 0; i < m; i += 2) {
+        SetBitmap(bitmap, interval[i], interval[i + 1]);
+      }
+    }
+  }
+
+  return count;
+}
+
+#endif  // PARQUET_EXAMPLES_GRAPHAR_LABEL_H

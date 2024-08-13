@@ -24,48 +24,12 @@
 #include <iostream>
 #include <memory>
 
-
-/// constants related to the test
-// 1. cyber-security-ad-44-nodes.csv - too small
-// row number: 954, label number: 7, test id: 0, 1, AND
-// 2. graph-data-science-43-nodes.csv - poor
-// row number: 2687, label number: 12, test id: 1, 6, AND
-// 3. twitter-v2-43-nodes.csv
-// row number: 43337, label number: 6, test id: 0, 1, AND
-// 4. network-management-43-nodes.csv
-// row number: 83847, label number: 17, test id: 4, 5, AND
-// 5. fraud-detection-43-nodes.csv
-// row number: 333022, label number: 13, test id: 3, 5, AND
-
-// new datasets
-// 1. legis-graph-43-nodes.csv, 11825, 8, {0, 1}, OR
-// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND - poor
-// 3. bloom-43-nodes.csv, 32960, 18, {8, 9}, OR
-// 4. pole-43-nodes.csv, 61534, 11, {1, 5}, OR
-// 5. openstreetmap-43-nodes.csv, 71566, 10, {2, 5}, AND
-// 6. icij-paradise-papers-43-nodes.csv, 163414, 5, {0, 4}, OR
-// 7. citations-43-nodes.csv, 263902, 3, {0, 2}, OR
-// 8. twitter-trolls-43-nodes.csv, 281177, 6, {0, 1}, AND
-// 9. icij-offshoreleaks-44-nodes.csv, 1969309, 5, {1, 3}, OR
-// 10. twitch-43-nodes.csv, 10516173, 5, {0, 1}, AND - poor
-
-// ldbc datasets
-// 1. place_0_0.csv, 1460, 4, {0, 2}, AND
-// 2. organisation_0_0.csv, 7955, 3, {0, 1}, AND
-
-// ogb datasets
-// 1. ogbn-arxiv.csv, 169343, 40, {0, 1}, OR
-// 2. ogbn-proteins.csv, 132534, 112, {0, 1}, AND
-// 3. ogbn-mag.csv, 736389, 349, {0, 1}, OR
-// 4. ogbn-products.csv, 2449029, 47, {0, 1}, OR
-// 5. ogbn-papers100M.csv, 111059956, 172, {0, 1}, OR
-
-const int TEST_ROUNDS = 1;                          // the number of test rounds
+const int TEST_ROUNDS = 1;                               // the number of test rounds
 const int TOT_ROWS_NUM = 100000;                         // the number of total vertices
-const int TOT_LABEL_NUM = 20;                         // the number of total labels
-const int TESTED_LABEL_NUM = 2;                       // the number of tested labels
-int tested_label_ids[TESTED_LABEL_NUM] = {0, 1};      // the ids of tested labels
-const QUERY_TYPE fix_query_type = QUERY_TYPE::COUNT;  // the query type
+const int TOT_LABEL_NUM = 8;                             // the number of total labels
+const int TESTED_LABEL_NUM = 4;                          // the number of tested labels
+int tested_label_ids[TESTED_LABEL_NUM] = {0, 2, 3, 7};   // the ids of tested labels
+const QUERY_TYPE fix_query_type = QUERY_TYPE::COUNT;     // the query type
 
 const char PARQUET_FILENAME_RLE[] =
     "parquet_graphar_label_RLE.parquet";  // the RLE filename
@@ -76,20 +40,14 @@ const char PARQUET_FILENAME_STRING[] =
 const char PARQUET_FILENAME_STRING_DICT[] =
     "parquet_graphar_label_string_dict.parquet";  // the STRING filename
 
-/// The label names
-// const std::string label_names[TOT_LABEL_NUM] = {"label0", "label1", "label2", "label3",
-//                                                 "label4", "label5", "label6",
-//                                                 "label7"};
-std::string label_names[MAX_LABEL_NUM];
-
-/// Tested label ids
-// const int tested_label_ids[TESTED_LABEL_NUM] = {0, 2, 3, 7};
+// The label names
+std::string label_names[TOT_LABEL_NUM] = {"label0", "label1", "label2", "label3",
+                                          "label4", "label5", "label6", "label7"};
 
 /// global variables
 int32_t length[TOT_LABEL_NUM];
 int32_t repeated_nums[TOT_LABEL_NUM][MAX_DECODED_NUM];
 bool repeated_values[TOT_LABEL_NUM][MAX_DECODED_NUM];
-//bool** label_column_data;
 bool label_column_data[TOT_ROWS_NUM][MAX_LABEL_NUM];
 
 /// The user-defined function to check if the state is valid.
@@ -97,14 +55,10 @@ bool label_column_data[TOT_ROWS_NUM][MAX_LABEL_NUM];
 static inline bool IsValid(bool* state, int column_number) {
   for (int i = 0; i < column_number; ++i) {
     // AND case
-    // if (!state[i]) return false;
-    // OR case
-    if (state[i]) return true;
+    if (!state[i]) return false;
   }
   // AND case
-  // return true;
-  // OR case
-  return false;
+  return true;
 }
 
 /// Generate data of label columns for the parquet file (using bool datatype).
@@ -386,24 +340,20 @@ void read_csv_file_and_generate_label_column_data_bool(const int num_rows,
                                                        const int num_columns);
 
 int main(int argc, char** argv) {
-  //label_column_data = new bool*[TOT_ROWS_NUM];
-  //for (int i = 0; i < TOT_ROWS_NUM; i++) {
-  //  label_column_data[i] = new bool[TOT_LABEL_NUM];
-  //}
   // hard-coded test
-  // hard_coded_test();
+  hard_coded_test();
 
   // generate label column data
-  // generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
+  generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
 
   // read csv and generate label column data
-  //read_csv_file_and_generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
+  // read_csv_file_and_generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
 
   // string test: disable dictionary
   string_test();
 
   // string test: enable dictionary
-  // string_test(false, true);
+  string_test(false, true);
 
   // bool plain test
   bool_plain_test();
@@ -435,7 +385,7 @@ void read_csv_file_and_generate_label_column_data_bool(const int num_rows,
   }
 }
 
-/* void generate_label_column_data_bool(const int num_rows, const int num_columns) {
+void generate_label_column_data_bool(const int num_rows, const int num_columns) {
   for (int index = 0; index < num_rows; index++) {
     for (int k = 0; k < num_columns; k++) {
       bool value;
@@ -455,7 +405,7 @@ void read_csv_file_and_generate_label_column_data_bool(const int num_rows,
       label_column_data[index][k] = value;
     }
   }
-} */
+}
 
 void hard_coded_test() {
   std::cout << "----------------------------------------\n";
