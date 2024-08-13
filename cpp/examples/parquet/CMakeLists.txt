@@ -22,10 +22,16 @@ add_executable(parquet-stream-api-example parquet_stream_api/stream_reader_write
 target_include_directories(parquet-low-level-example PRIVATE low_level_api/)
 target_include_directories(parquet-low-level-example2 PRIVATE low_level_api/)
 # GraphAr examples
-add_executable(parquet-graphar-label-example graphar/test.cc graphar/label.cc)
-add_executable(parquet-graphar-preprocess graphar/preprocess.cc)
+add_executable(parquet-graphar-label-example graphar/label.cc graphar/test.cc)
+add_executable(parquet-graphar-label-new-example graphar/label.cc graphar/test-new.cc)
+add_executable(parquet-graphar-label-all-example graphar/label.cc graphar/test-all.cc)
+add_executable(parquet-graphar-label-bitmap-example graphar/label.cc graphar/test-bitmap.cc)
+# add_executable(parquet-graphar-preprocess graphar/preprocess.cc)
 target_include_directories(parquet-graphar-label-example PRIVATE graphar/)
-target_include_directories(parquet-graphar-preprocess PRIVATE graphar/)
+target_include_directories(parquet-graphar-label-new-example PRIVATE graphar/)
+target_include_directories(parquet-graphar-label-all-example PRIVATE graphar/)
+target_include_directories(parquet-graphar-label-bitmap-example PRIVATE graphar/)
+# target_include_directories(parquet-graphar-preprocess PRIVATE graphar/)
 
 # The variables in these files are for illustration purposes
 set(PARQUET_EXAMPLES_WARNING_SUPPRESSIONS low_level_api/reader_writer.cc
@@ -66,7 +72,10 @@ target_link_libraries(parquet-low-level-example2 ${PARQUET_EXAMPLE_LINK_LIBS})
 target_link_libraries(parquet-stream-api-example ${PARQUET_EXAMPLE_LINK_LIBS})
 # GraphAr examples
 target_link_libraries(parquet-graphar-label-example ${PARQUET_EXAMPLE_LINK_LIBS})
-target_link_libraries(parquet-graphar-preprocess ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet-graphar-label-new-example ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet-graphar-label-all-example ${PARQUET_EXAMPLE_LINK_LIBS})
+target_link_libraries(parquet-graphar-label-bitmap-example ${PARQUET_EXAMPLE_LINK_LIBS})
+# target_link_libraries(parquet-graphar-preprocess ${PARQUET_EXAMPLE_LINK_LIBS})
 
 if(PARQUET_REQUIRE_ENCRYPTION)
   target_link_libraries(parquet-encryption-example ${PARQUET_EXAMPLE_LINK_LIBS})
@@ -80,7 +89,10 @@ add_dependencies(parquet
                  parquet-arrow-example
                  parquet-stream-api-example
                  parquet-graphar-label-example
-                 parquet-graphar-preprocess)
+                 parquet-graphar-label-new-example
+                 parquet-graphar-label-all-example
+                 parquet-graphar-label-bitmap-example)
+#                parquet-graphar-preprocess)
 
 if(PARQUET_REQUIRE_ENCRYPTION)
   add_dependencies(parquet parquet-encryption-example

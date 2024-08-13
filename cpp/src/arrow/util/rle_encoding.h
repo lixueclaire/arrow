@@ -124,8 +124,7 @@ class RleDecoder {
   /// total numbers of true/false values, and the length of the batch.
   /// Returns the number of decoded elements.
   template <typename T>
-  int GetBatch(int32_t* repeated_num, T* repeated_value, int32_t& true_num,
-               int32_t& false_num, int32_t& length, int batch_size);
+  int GetBatch(int32_t* repeated_num, T* repeated_value, int32_t& length, int batch_size);
 
   /// Like GetBatch but add spacing for null entries
   template <typename T>
@@ -344,9 +343,8 @@ inline int RleDecoder::GetBatch(T* values, int batch_size) {
 // GetBatch method for decoding GraphAr labels.
 template <typename T>
 inline int RleDecoder::GetBatch(int32_t* repeated_nums, T* repeated_values,
-                                int32_t& true_num, int32_t& false_num, int32_t& length,
-                                int batch_size) {
-  DCHECK_EQ(bit_width_, 1);  // the bit_width of bool must be 1
+                                int32_t& length, int batch_size) {
+  // DCHECK_EQ(bit_width_, 1);  // the bit_width of bool must be 1
   int values_read = 0;
 
   while (values_read < batch_size) {
@@ -354,12 +352,6 @@ inline int RleDecoder::GetBatch(int32_t* repeated_nums, T* repeated_values,
 
     if (repeat_count_ > 0) {  // Repeated value case.
       int repeat_batch = std::min(remaining, repeat_count_);
-      // update true_num and false_num
-      if (current_value_ == 1) {
-        true_num += repeat_batch;
-      } else {
-        false_num += repeat_batch;
-      }
       // update repeated_nums and repeated_values
       length++;
       *repeated_nums = repeat_batch;
@@ -375,14 +367,6 @@ inline int RleDecoder::GetBatch(int32_t* repeated_nums, T* repeated_values,
       int actual_read = bit_reader_.GetBatch(bit_width_, repeated_values, literal_batch);
       if (actual_read != literal_batch) {
         return values_read;
-      }
-      // update true_num and false_num
-      for (int i = 0; i < literal_batch; i++) {
-        if (repeated_values[i] == 1) {
-          true_num++;
-        } else {
-          false_num++;
-        }
       }
       // update repeated_nums
       std::fill(repeated_nums, repeated_nums + literal_batch, 1);

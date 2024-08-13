@@ -1163,8 +1163,8 @@ class PlainBooleanDecoder : public DecoderImpl, virtual public BooleanDecoder {
   int Decode(uint8_t* buffer, int max_values) override;
   int Decode(bool* buffer, int max_values) override;
   // Decode for GraphAr labels
-  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& true_num,
-             int32_t& false_num, int32_t& length, int max_values) override {
+  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& length,
+             int max_values) override {
     /// ！！！ not implemented
     throw ParquetException(
         "Decode() for GraphAr labels is not implemented in PlainBooleanDecoder!");
@@ -3020,11 +3020,11 @@ class RleBooleanDecoder : public DecoderImpl, virtual public BooleanDecoder {
   // repeated values. The total number of true and false values as well as the length
   // of the decoded buffer are returned in true_num, false_num and length.
   // The number of values decoded is the return value of the function.
-  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& true_num,
-             int32_t& false_num, int32_t& length, int max_values) override {
+  int Decode(int32_t* repeated_nums, bool* repeated_values, int32_t& length,
+             int max_values) override {
     max_values = std::min(max_values, num_values_);
-    if (decoder_->GetBatch<bool>(repeated_nums, repeated_values, true_num, false_num,
-                                 length, max_values) != max_values) {
+    if (decoder_->GetBatch<bool>(repeated_nums, repeated_values, length, max_values) !=
+        max_values) {
       ParquetException::EofException();
     }
     num_values_ -= max_values;
