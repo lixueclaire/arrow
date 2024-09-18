@@ -423,7 +423,7 @@ void writeToCsv(const std::shared_ptr<arrow::Table>& table, const std::string& p
 int main (int argc, char* argv[]) {
   std::string edge_source_file = std::string(argv[1]);
   std::string path_to_file = std::string(argv[2]);
-  int32_t vertex_num = std::stoi(argv[3]);
+  int64_t vertex_num = std::stol(argv[3]);
   bool is_directed = false;
   if (strcmp(argv[4], "true") == 0) {
     is_directed = true;
@@ -442,6 +442,17 @@ int main (int argc, char* argv[]) {
   }
   std::string delemiter = std::string(argv[8]);
   int32_t ignore_line_num = std::stoi(argv[9]);
+
+  std::cout << "NOTE: edge_source_file: " << edge_source_file
+            << "\npath_to_file: " << path_to_file 
+            << "\nvertex_num: " << vertex_num
+            << "\nis_directed: " << is_directed
+            << "\nis_weighted: " << is_weighted
+            << "\nis_sorted: " << is_sorted
+            << "\nis_reverse: " << is_reverse
+            << "\ndelemiter: " << delemiter
+            << "\nignore_line_num: " << ignore_line_num << std::endl;
+
   std::shared_ptr<arrow::Table> edge_table;
   if (is_reverse) {
     edge_table = read_csv_to_arrow_table(edge_source_file, is_weighted, delemiter, ignore_line_num)->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();
@@ -465,13 +476,13 @@ int main (int argc, char* argv[]) {
   // std::cout << "table: " << print_table->ToString() << std::endl;
   // writeToCsv(print_table, "test.csv");
   // return 0;
-  // DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file + "-base"));
+  DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file + "-base"));
   auto run_start = clock();
   auto offset = getOffsetTable(edge_table, kSrcIndexCol, vertex_num);
   auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "offset time: " << run_time << "ms" << std::endl;
   run_start = clock();
-  DCHECK_OK(WriteToFile(edge_table, path_to_file + "-2-delta"));
+  DCHECK_OK(WriteToFile(edge_table, path_to_file + "-delta"));
   DCHECK_OK(WriteOffsetToFile(offset, path_to_file + "-offset"));
   run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   std::cout << "write time: " << run_time << "ms" << std::endl;

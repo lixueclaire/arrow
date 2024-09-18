@@ -161,7 +161,7 @@ void ReadBitMap(const std::string& path_to_file, const int64_t& offset, const in
   }
   int64_t total_values_remaining = length;
   int64_t values_read = 0;
-  auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(0));
+  auto col_reader = std::static_pointer_cast<parquet::Int64Reader>(reader_->RowGroup(i++)->Column(1));
   col_reader->Skip(remain_offset);
   while (col_reader->HasNext() && total_values_remaining > 0) {
     col_reader->ReadBatch(total_values_remaining, bit_map, &values_read);
@@ -312,8 +312,11 @@ void ReadBitMapBaseLineNoOffset(const std::string& path_to_file, const int64_t& 
 
 
   // Iterate over all the RowGroups in the file
-  int col_id = file_metadata->schema()->ColumnIndex("Comment.id");
-  int col_id2 = file_metadata->schema()->ColumnIndex("Tag.id");
+  // int col_id = file_metadata->schema()->ColumnIndex("_graphArSrcIndex");
+  // int col_id2 = file_metadata->schema()->ColumnIndex("_graphArDstIndex");
+  int col_id = 0;
+  int col_id2 = 1;
+  std::cout << "col_id: " << col_id << " col_id2: " << col_id2 << std::endl;
   int64_t src, dst;
   for (int rg = 0; rg < row_group_count; ++rg) {
     // Get the RowGroup Reader
@@ -385,7 +388,6 @@ void RunExamples(const std::string& path_to_file, int64_t vertex_num, int64_t ve
   auto end = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
   std::cout << "First run time: " << duration << " ms" << std::endl;
-  return;
   run_start = clock();
   ReadBitMap(path, offset, length, bit_map);
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
@@ -428,7 +430,7 @@ void RunExamplesBaseLine(const std::string& path_to_file, int64_t vertex_num, in
 
 void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex_num, int64_t vertex_id) {
   // ARROW_RETURN_NOT_OK(WriteToFile(path_to_file));
-  std::string path = path_to_file + ".parquet";
+  std::string path = path_to_file + "-base";
   uint64_t* bit_map = new uint64_t[vertex_num / 64 + 1];
   memset(bit_map, 0, sizeof(uint64_t) * (vertex_num / 64 + 1));
   auto run_start = clock();
@@ -438,7 +440,6 @@ void RunExamplesBaseLineNoOffset(const std::string& path_to_file, int64_t vertex
   auto end = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
   std::cout << "First run time: " << duration << " ms" << std::endl;
-  return;
   ReadBitMapBaseLineNoOffset(path, vertex_id, bit_map);
   auto run_time_1 = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
   run_start = clock();
