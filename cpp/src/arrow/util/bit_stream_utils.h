@@ -324,16 +324,16 @@ inline void GetBitMap_(int num_bits, uint64_t* bit_map, uint64_t* curr, int max_
                       *bit_offset);
     switch(num_bits) {
     case 1:
-      plaint::unpack1(&bits, bit_map, *curr);
+      simd::unpack1(&bits, bit_map, *curr);
       break;
     case 2:
-      plaint::unpack2(&bits, bit_map, *curr);
+      simd::unpack2(&bits, bit_map, *curr);
       break;
     case 4:
-      plaint::unpack4(&bits, bit_map, *curr);
+      simd::unpack4(&bits, bit_map, *curr);
       break;
     case 8:
-      plaint::unpack8(&bits, bit_map, *curr);
+      simd::unpack8(&bits, bit_map, *curr);
       break;
     case 16:
       plaint::unpack16(&bits, bit_map, *curr);
@@ -350,20 +350,20 @@ inline void GetBitMap_(int num_bits, uint64_t* bit_map, uint64_t* curr, int max_
     uint32_t bits_2 = static_cast<uint32_t>(bit_util::TrailingBits((*buffered_values >> *bit_offset),  need_bits) >> 32);
     switch(num_bits) {
     case 1:
-      plaint::unpack1(&bits_1, bit_map, *curr);
-      plaint::unpack1(&bits_2, bit_map, *curr);
+      simd::unpack1(&bits_1, bit_map, *curr);
+      simd::unpack1(&bits_2, bit_map, *curr);
       break;
     case 2:
-      plaint::unpack2(&bits_1, bit_map, *curr);
-      plaint::unpack2(&bits_2, bit_map, *curr);
+      simd::unpack2(&bits_1, bit_map, *curr);
+      simd::unpack2(&bits_2, bit_map, *curr);
       break;
     case 4:
-      plaint::unpack4(&bits_1, bit_map, *curr);
-      plaint::unpack4(&bits_2, bit_map, *curr);
+      simd::unpack4(&bits_1, bit_map, *curr);
+      simd::unpack4(&bits_2, bit_map, *curr);
       break;
     case 8:
-      plaint::unpack8(&bits_1, bit_map, *curr);
-      plaint::unpack8(&bits_2, bit_map, *curr);
+      simd::unpack8(&bits_1, bit_map, *curr);
+      simd::unpack8(&bits_2, bit_map, *curr);
       break;
     case 16:
       plaint::unpack16(&bits_1, bit_map, *curr);
