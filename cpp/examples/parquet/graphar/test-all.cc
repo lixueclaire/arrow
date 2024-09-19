@@ -24,9 +24,9 @@
 #include <memory>
 
 /// constants related to the test
-// 1. cyber-security-ad-44-nodes.csv - too small
+// 1. cyber-security-ad-44-nodes.csv
 // row number: 954, label number: 7, test id: 0, 1, AND
-// 2. graph-data-science-43-nodes.csv - poor
+// 2. graph-data-science-43-nodes.csv
 // row number: 2687, label number: 12, test id: 1, 6, AND
 // 3. twitter-v2-43-nodes.csv
 // row number: 43337, label number: 6, test id: 0, 1, AND

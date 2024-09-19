@@ -26,9 +26,9 @@
 
 
 /// constants related to the test
-// 1. cyber-security-ad-44-nodes.csv - too small
+// 1. cyber-security-ad-44-nodes.csv
 // row number: 954, label number: 7, test id: 0, 1, AND
-// 2. graph-data-science-43-nodes.csv - poor
+// 2. graph-data-science-43-nodes.csv
 // row number: 2687, label number: 12, test id: 1, 6, AND
 // 3. twitter-v2-43-nodes.csv
 // row number: 43337, label number: 6, test id: 0, 1, AND
@@ -47,7 +47,7 @@
 // 7. citations-43-nodes.csv, 263902, 3, {0, 2}, OR
 // 8. twitter-trolls-43-nodes.csv, 281177, 6, {0, 1}, AND
 // 9. icij-offshoreleaks-44-nodes.csv, 1969309, 5, {1, 3}, OR
-// 10. twitch-43-nodes.csv, 10516173, 5, {0, 1}, AND - poor
+// 10. twitch-43-nodes.csv, 10516173, 5, {0, 1}, AND
 
 // ldbc datasets
 // 1. place_0_0.csv, 1460, 4, {0, 2}, AND
