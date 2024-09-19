@@ -285,7 +285,9 @@ static inline int NextPower2Int(int n) {
 // Returns the minimum number of bits needed to represent an unsigned value
 static inline int NumRequiredBits(uint64_t x) { return 64 - CountLeadingZeros(x); }
 
-static inline int Power2NumRequiredBits(uint64_t x) { return NextPower2Int(64 - CountLeadingZeros(x)); }
+static inline int Power2NumRequiredBits(uint64_t x) {
+  return NextPower2Int(64 - CountLeadingZeros(x));
+}
 
 // Returns ceil(log2(x)).
 static inline int Log2(uint64_t x) {

@@ -51,6 +51,10 @@ set(ARROW_VERSION "13.0.0-SNAPSHOT")
 
 string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" ARROW_BASE_VERSION "${ARROW_VERSION}")
 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -mcmodel=medium")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -mcmodel=medium")
+
+
 # if no build build type is specified, default to release builds
 if(NOT DEFINED CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE

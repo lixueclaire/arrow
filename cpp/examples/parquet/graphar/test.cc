@@ -16,6 +16,7 @@
 // under the License.
 
 #include <label.h>
+#include <chrono>
 
 #include <cassert>
 #include <ctime>
@@ -23,10 +24,11 @@
 #include <iostream>
 #include <memory>
 
+
 /// constants related to the test
-// 1. cyber-security-ad-44-nodes.csv - too small
+// 1. cyber-security-ad-44-nodes.csv
 // row number: 954, label number: 7, test id: 0, 1, AND
-// 2. graph-data-science-43-nodes.csv - poor
+// 2. graph-data-science-43-nodes.csv
 // row number: 2687, label number: 12, test id: 1, 6, AND
 // 3. twitter-v2-43-nodes.csv
 // row number: 43337, label number: 6, test id: 0, 1, AND
@@ -37,7 +39,7 @@
 
 // new datasets
 // 1. legis-graph-43-nodes.csv, 11825, 8, {0, 1}, OR
-// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND - poor
+// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND
 // 3. bloom-43-nodes.csv, 32960, 18, {8, 9}, OR
 // 4. pole-43-nodes.csv, 61534, 11, {1, 5}, OR
 // 5. openstreetmap-43-nodes.csv, 71566, 10, {2, 5}, AND
@@ -45,7 +47,7 @@
 // 7. citations-43-nodes.csv, 263902, 3, {0, 2}, OR
 // 8. twitter-trolls-43-nodes.csv, 281177, 6, {0, 1}, AND
 // 9. icij-offshoreleaks-44-nodes.csv, 1969309, 5, {1, 3}, OR
-// 10. twitch-43-nodes.csv, 10516173, 5, {0, 1}, AND - poor
+// 10. twitch-43-nodes.csv, 10516173, 5, {0, 1}, AND
 
 // ldbc datasets
 // 1. place_0_0.csv, 1460, 4, {0, 2}, AND
@@ -58,11 +60,11 @@
 // 4. ogbn-products.csv, 2449029, 47, {0, 1}, OR
 // 5. ogbn-papers100M.csv, 111059956, 172, {0, 1}, OR
 
-const int TEST_ROUNDS = 100;                          // the number of test rounds
-const int TOT_ROWS_NUM = 100;                         // the number of total vertices
-const int TOT_LABEL_NUM = 10;                         // the number of total labels
+const int TEST_ROUNDS = 1;                          // the number of test rounds
+const int TOT_ROWS_NUM = 32960;                         // the number of total vertices
+const int TOT_LABEL_NUM = 18;                         // the number of total labels
 const int TESTED_LABEL_NUM = 2;                       // the number of tested labels
-int tested_label_ids[TESTED_LABEL_NUM] = {1, 6};      // the ids of tested labels
+int tested_label_ids[TESTED_LABEL_NUM] = {8, 9};      // the ids of tested labels
 const QUERY_TYPE fix_query_type = QUERY_TYPE::COUNT;  // the query type
 
 const char PARQUET_FILENAME_RLE[] =
@@ -87,6 +89,7 @@ std::string label_names[MAX_LABEL_NUM];
 int32_t length[TOT_LABEL_NUM];
 int32_t repeated_nums[TOT_LABEL_NUM][MAX_DECODED_NUM];
 bool repeated_values[TOT_LABEL_NUM][MAX_DECODED_NUM];
+//bool** label_column_data;
 bool label_column_data[TOT_ROWS_NUM][MAX_LABEL_NUM];
 
 /// The user-defined function to check if the state is valid.
@@ -94,14 +97,14 @@ bool label_column_data[TOT_ROWS_NUM][MAX_LABEL_NUM];
 static inline bool IsValid(bool* state, int column_number) {
   for (int i = 0; i < column_number; ++i) {
     // AND case
-    if (!state[i]) return false;
+    // if (!state[i]) return false;
     // OR case
-    // if (state[i]) return true;
+    if (state[i]) return true;
   }
   // AND case
-  return true;
+  // return true;
   // OR case
-  // return false;
+  return false;
 }
 
 /// Generate data of label columns for the parquet file (using bool datatype).
@@ -135,12 +138,19 @@ void string_test(bool validate = false, bool enable_dictionary = false) {
   // test getting count
   if (fix_query_type == QUERY_TYPE::COUNT) {
     auto run_start = clock();
+    auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < TEST_ROUNDS; i++) {
       count = read_parquet_file_and_get_valid_indices(
           filename, TOT_ROWS_NUM, TOT_LABEL_NUM, TESTED_LABEL_NUM, tested_label_ids,
           label_names, IsValid, &indices, bitmap, QUERY_TYPE::COUNT);
     }
     auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+    auto end = std::chrono::high_resolution_clock::now();
+    // 计算时间差
+    std::chrono::duration<double> duration = end - start;
+
+    // 输出执行时间（单位：秒）
+    std::cout << "代码执行时间: " << duration.count() << " 秒" << std::endl;
     std::cout << "[Performance] The run time for the test (COUNT) is: " << run_time
               << " ms.\n"
               << std::endl;
@@ -217,12 +227,17 @@ void bool_plain_test(bool validate = false,
   // test getting count
   if (fix_query_type == QUERY_TYPE::COUNT) {
     auto run_start = clock();
+    auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < TEST_ROUNDS; i++) {
       count = read_parquet_file_and_get_valid_indices(
           filename, TOT_ROWS_NUM, TOT_LABEL_NUM, TESTED_LABEL_NUM, tested_label_ids,
           IsValid, &indices, bitmap, QUERY_TYPE::COUNT);
     }
     auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+    auto end = std::chrono::high_resolution_clock::now();
+    // 计算时间差
+    std::chrono::duration<double> duration = end - start;
+    std::cout << "代码执行时间: " << duration.count() << " 秒" << std::endl;
     std::cout << "[Performance] The run time for the test (COUNT) is: " << run_time
               << " ms.\n"
               << std::endl;
@@ -287,6 +302,7 @@ void RLE_test(bool validate = false) {
   // test getting count
   if (fix_query_type == QUERY_TYPE::COUNT) {
     auto run_start = clock();
+    auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < TEST_ROUNDS; i++) {
       count = read_parquet_file_and_get_valid_intervals(
           PARQUET_FILENAME_RLE, TOT_ROWS_NUM, TOT_LABEL_NUM, TESTED_LABEL_NUM,
@@ -294,6 +310,10 @@ void RLE_test(bool validate = false) {
           bitmap, QUERY_TYPE::COUNT);
     }
     auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+    auto end = std::chrono::high_resolution_clock::now();
+    // 计算时间差
+    std::chrono::duration<double> duration = end - start;
+    std::cout << "代码执行时间: " << duration.count() << " 秒" << std::endl;
     std::cout << "[Performance] The run time for the test (COUNT) is: " << run_time
               << " ms.\n"
               << std::endl;
@@ -366,6 +386,10 @@ void read_csv_file_and_generate_label_column_data_bool(const int num_rows,
                                                        const int num_columns);
 
 int main(int argc, char** argv) {
+  //label_column_data = new bool*[TOT_ROWS_NUM];
+  //for (int i = 0; i < TOT_ROWS_NUM; i++) {
+  //  label_column_data[i] = new bool[TOT_LABEL_NUM];
+  //}
   // hard-coded test
   // hard_coded_test();
 
@@ -379,7 +403,7 @@ int main(int argc, char** argv) {
   string_test();
 
   // string test: enable dictionary
-  string_test(false, true);
+  // string_test(false, true);
 
   // bool plain test
   bool_plain_test();
