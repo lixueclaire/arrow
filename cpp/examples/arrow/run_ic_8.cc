@@ -879,11 +879,15 @@ int main(int argc, char** argv) {
   int64_t vertex_num_post = std::stol(argv[8]);
   int64_t vertex_num_comment = std::stol(argv[9]);
   int64_t vertex_num_person = std::stol(argv[10]);
-  auto run_start = clock();
-  IC8_ACERO(vertex_id, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
-  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "run time: " << run_time << "ms" << std::endl;
-  // IC8_GRAPHAR(vertex_id, vertex_num_post, vertex_num_comment, vertex_num_person, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
+  std::string type = argv[11];
+  if (type == "acero") {
+    auto run_start = clock();
+    IC8_ACERO(vertex_id, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
+    auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+    std::cout << "run time: " << run_time << "ms" << std::endl;
+  } else {
+    IC8_GRAPHAR(vertex_id, vertex_num_post, vertex_num_comment, vertex_num_person, post_has_creator_person_path_file, comment_has_creator_person_path_file, comment_replyof_post_path_file, comment_replyof_comment_path_file, comment_path_file, person_path_file);
+  }
   // CheckCorrectness(path_to_file, vertex_num, vertex_id);
   // return 0;
   // if (!status.ok()) {
