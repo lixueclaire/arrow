@@ -37,7 +37,7 @@
 
 // new datasets
 // 1. legis-graph-43-nodes.csv, 11825, 8, {0, 1}, OR
-// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND - poor
+// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND
 // 3. bloom-43-nodes.csv, 32960, 18, {8, 9}, OR
 // 4. pole-43-nodes.csv, 61534, 11, {1, 5}, OR
 // 5. openstreetmap-43-nodes.csv, 71566, 10, {2, 5}, AND
@@ -57,8 +57,8 @@
 // 4. ogbn-products.csv, 2449029, 47, {0, 1}, OR
 
 const int TEST_ROUNDS = 1;                            // the number of test rounds
-const int TOT_ROWS_NUM = 100000;                    // the number of total vertices
-const int TOT_LABEL_NUM = 20;                         // the number of total labels
+const int TOT_ROWS_NUM = 32960;                       // the number of total vertices
+const int TOT_LABEL_NUM = 18;                         // the number of total labels
 const QUERY_TYPE fix_query_type = QUERY_TYPE::COUNT;  // the query type
 int TESTED_LABEL_NUM = 1;                             // the number of tested labels
 int tested_label_ids[TOT_LABEL_NUM] = {0};            // the ids of tested labels
@@ -504,6 +504,7 @@ void one_column_test() {
   }
   std::cout << "----------------------------------------\n";
   std::cout << "The average results for one_column are: \n";
+  std::cout << "String without dictionary, String with dictionary, Bool plain, Bool RLE, Bool RLE with merge\n";
   for (int j = 0; j < 5; j++) {
     printf("%.6lf", sum[j] / TOT_LABEL_NUM);
     if (j != 4) {

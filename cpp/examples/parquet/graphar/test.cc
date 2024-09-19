@@ -39,7 +39,7 @@
 
 // new datasets
 // 1. legis-graph-43-nodes.csv, 11825, 8, {0, 1}, OR
-// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND - poor
+// 2. recommendations-43-nodes.csv, 33880, 6, {3, 4}, AND
 // 3. bloom-43-nodes.csv, 32960, 18, {8, 9}, OR
 // 4. pole-43-nodes.csv, 61534, 11, {1, 5}, OR
 // 5. openstreetmap-43-nodes.csv, 71566, 10, {2, 5}, AND
@@ -61,10 +61,10 @@
 // 5. ogbn-papers100M.csv, 111059956, 172, {0, 1}, OR
 
 const int TEST_ROUNDS = 1;                          // the number of test rounds
-const int TOT_ROWS_NUM = 100000;                         // the number of total vertices
-const int TOT_LABEL_NUM = 20;                         // the number of total labels
+const int TOT_ROWS_NUM = 32960;                         // the number of total vertices
+const int TOT_LABEL_NUM = 18;                         // the number of total labels
 const int TESTED_LABEL_NUM = 2;                       // the number of tested labels
-int tested_label_ids[TESTED_LABEL_NUM] = {0, 1};      // the ids of tested labels
+int tested_label_ids[TESTED_LABEL_NUM] = {8, 9};      // the ids of tested labels
 const QUERY_TYPE fix_query_type = QUERY_TYPE::COUNT;  // the query type
 
 const char PARQUET_FILENAME_RLE[] =
@@ -397,7 +397,7 @@ int main(int argc, char** argv) {
   // generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
 
   // read csv and generate label column data
-  //read_csv_file_and_generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
+  read_csv_file_and_generate_label_column_data_bool(TOT_ROWS_NUM, TOT_LABEL_NUM);
 
   // string test: disable dictionary
   string_test();
