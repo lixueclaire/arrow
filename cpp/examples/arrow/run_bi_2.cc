@@ -1415,7 +1415,6 @@ void check_schema(const std::string& path) {
   std::cout << "schema: " << file_metadata->schema()->ToString() << std::endl;
 }
 
-/*
 int main(int argc, char** argv) {
   std::string tag_hasType_tagClass_path_file = argv[1];
   std::string post_hasTag_tag_path_file = argv[2];
@@ -1439,20 +1438,19 @@ int main(int argc, char** argv) {
   // IC8_GRAPHAR();
   return 0;
 }
-*/
 
+/*
 int main(int argc, char** argv) {
   std::string comment_tagClass_label_path_file = argv[1];
   std::string tag_class = argv[2];
   int64_t vertex_num_comment = std::stol(argv[3]);
-  /*
-  auto run_start = clock();
-  test_acero(tag_class_id, date, tag_hasType_tagClass_path_file, post_hasTag_tag_path_file, comment_hasTag_tag_path_file, comment_path_file, post_path_file, tag_path_file);
-  auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
-  std::cout << "run time: " << run_time << "ms" << std::endl;
-  */
+  // auto run_start = clock();
+  // test_acero(tag_class_id, date, tag_hasType_tagClass_path_file, post_hasTag_tag_path_file, comment_hasTag_tag_path_file, comment_path_file, post_path_file, tag_path_file);
+  // auto run_time = 1000.0 * (clock() - run_start) / CLOCKS_PER_SEC;
+  // std::cout << "run time: " << run_time << "ms" << std::endl;
  test_label_filtering(tag_class, vertex_num_comment, comment_tagClass_label_path_file);
  // test_string_filtering(tag_class, vertex_num_comment, comment_tagClass_label_path_file);
   // IC8_GRAPHAR();
   return 0;
 }
+*/

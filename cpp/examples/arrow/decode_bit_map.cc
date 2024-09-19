@@ -459,7 +459,7 @@ void CheckCorretness(const std::string& path_to_file, int32_t vertex_num, int64_
   int64_t offset = 0, length = 0;
   getOffset(path_to_file + "-offset", vertex_id, offset, length);
   std::cout << "offset: " << offset << " length: " << length << std::endl;
-  ReadBitMap(path_to_file + "-2-delta", offset, length, bit_map);
+  ReadBitMap(path_to_file + "-delta", offset, length, bit_map);
   // ReadBitMapBaseLine(path_to_file + "-base", offset, length, bit_map);
   ReadBitMapBaseLineNoOffset(path_to_file + "-origin-base", vertex_id, bit_map);
   delete[] bit_map;
@@ -481,11 +481,14 @@ int main(int argc, char** argv) {
   if (argc > 4) {
     std::string type = argv[4];  
     if (type == "delta") {
+      // run delta + offset
       RunExamples(path_to_file, vertex_num, vertex_id);
     } else {
+      // run base + offset
       RunExamplesBaseLine(path_to_file, vertex_num, vertex_id);
     }
   } else {
+    // run plain
     RunExamplesBaseLineNoOffset(path_to_file, vertex_num, vertex_id);
   }
 
