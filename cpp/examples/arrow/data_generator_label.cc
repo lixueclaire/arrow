@@ -614,20 +614,24 @@ void write_vertex_file(
   // std::cout << "num rows: " << vertex_table->num_rows() << std::endl;
   auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 1)->SelectColumns({0, 1}).ValueOrDie();
   // std::cout << "num rows: " << edge_table->num_rows() << std::endl;
-  // auto person_table = read_vertex_csv_to_arrow_table(person_vertex_file, delemiter)->SelectColumns({0, 1, 2}).ValueOrDie()->RenameColumns({"personId", "firstName", "lastName"}).ValueOrDie();
-  auto person_table = read_vertex_csv_to_arrow_table(person_vertex_file, delemiter)->SelectColumns({0}).ValueOrDie();
-  auto person_table_index = add_index_column(person_table, "personIndex");
-  // DCHECK_OK(WriteToFileBaseLine(person_table_index, path_to_file));
-  // return;
-  auto edge_table_with_index = DoHashJoin(edge_table, person_table_index, "dst", "id", {"src"}, {"personIndex"});
-  // auto table = DoHashJoin(person_table, edge_table, "personId", "dst", {"personId", "firstName", "secondName"}, {"src"});
-  // std::cout << "num rows: " << edge_table_with_index->num_rows() << std::endl;
-  // table = DoHashJoin(vertex_table, table, "id", "src", {"id", "creationDate", "content"}, {"personId", "firstName", "secondName"});
-  auto table = DoHashJoin(vertex_table, edge_table_with_index, "id", "src", {"id", "creationDate", "content"}, {"personIndex"});
-  // auto table = DoHashJoin(edge_table_with_index, vertex_table, "src", "id", {"personIndex"}, {"id", "creationDate", "content"});
+  if (path_to_file.find("person") != std::string::npos) {
+    auto person_table = read_vertex_csv_to_arrow_table(person_vertex_file, delemiter)->SelectColumns({0, 1, 2}).ValueOrDie()->RenameColumns({"personId", "firstName", "lastName"}).ValueOrDie();
+    auto table = DoHashJoin(person_table, edge_table, "personId", "dst", {"personId", "firstName", "secondName"}, {"src"});
+    DCHECK_OK(WriteToFileBaseLine(table, path_to_file));
+  } else {
+    auto person_table = read_vertex_csv_to_arrow_table(person_vertex_file, delemiter)->SelectColumns({0}).ValueOrDie();
+    auto person_table_index = add_index_column(person_table, "personIndex");
+    // DCHECK_OK(WriteToFileBaseLine(person_table_index, path_to_file));
+    // return;
+    auto edge_table_with_index = DoHashJoin(edge_table, person_table_index, "dst", "id", {"src"}, {"personIndex"});
+    // std::cout << "num rows: " << edge_table_with_index->num_rows() << std::endl;
+    // table = DoHashJoin(vertex_table, table, "id", "src", {"id", "creationDate", "content"}, {"personId", "firstName", "secondName"});
+    auto table = DoHashJoin(vertex_table, edge_table_with_index, "id", "src", {"id", "creationDate", "content"}, {"personIndex"});
+    // auto table = DoHashJoin(edge_table_with_index, vertex_table, "src", "id", {"personIndex"}, {"id", "creationDate", "content"});
   
-  // std::cout << "table: " << table->ToString() << std::endl;
-  DCHECK_OK(WriteToFileBaseLine(table, path_to_file));
+    // std::cout << "table: " << table->ToString() << std::endl;
+    DCHECK_OK(WriteToFileBaseLine(table, path_to_file));
+  }
   return;
 }
 
