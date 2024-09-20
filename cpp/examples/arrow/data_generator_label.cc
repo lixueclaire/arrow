@@ -115,11 +115,13 @@ std::shared_ptr<arrow::Table> read_csv_to_arrow_table(
     parse_options.delimiter = '|'; 
   }
   auto convert_options = arrow::csv::ConvertOptions::Defaults();
+  /*
   if (is_weighted) {
     read_options.column_names = {"src", "dst", "weight"};
   } else {
     read_options.column_names = {"src", "dst"};
   }
+  */
 
   // Instantiate TableReader from input stream and options
   auto maybe_reader = arrow::csv::TableReader::Make(
@@ -518,7 +520,8 @@ void write_to_graphar(
     const std::string& dst_label,
     const std::string& src_file_type,
     const std::string& dst_file_type,
-    const std::string& reversed
+    const std::string& reversed,
+    const std::string& to_undirected
     ) {
     // read vertex source to arrow table
     std::string delemiter = "|";
@@ -531,7 +534,7 @@ void write_to_graphar(
     }
     // auto dst_vertex_table = read_vertex_csv_to_arrow_table(dst_vertex_source_file, delemiter);
     // std::cout << "schema: " << dst_vertex_table->schema()->ToString() << std::endl;
-    auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 1)->SelectColumns({0, 1}).ValueOrDie();
+    auto edge_table = read_csv_to_arrow_table(edge_source_file, false, delemiter, 1)->SelectColumns({0, 1}).ValueOrDie()->RenameColumns({"src", "dst"}).ValueOrDie();
     // auto src_vertex_table = read_vertex_csv_to_arrow_table(src_vertex_source_file, delemiter)->SelectColumns({0}).ValueOrDie();
     auto dst_vertex_table_with_index = add_index_column(dst_vertex_table, kDstIndexCol);
     int64_t vertex_num = dst_vertex_table_with_index->num_rows();
@@ -576,16 +579,22 @@ void write_to_graphar(
       std::cout << "not reverse" << std::endl;
       edge_table_with_src_dst_index = DoHashJoin(edge_table_with_dst_index, src_vertex_table_with_index, "src", "id", {kDstIndexCol}, {kSrcIndexCol});
     }
+    auto first_column_name = edge_table_with_src_dst_index->schema()->field(0)->name();
+    if (first_column_name != kSrcIndexCol) {
+      edge_table_with_src_dst_index = edge_table_with_src_dst_index->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();
+    }
     //->SelectColumns({1, 0}).ValueOrDie()->RenameColumns({kSrcIndexCol, kDstIndexCol}).ValueOrDie();
     // auto edge_table_with_src_dst_index = DoHashJoin(src_vertex_table_with_index, edge_table_with_dst_index, kSrcIndexCol, "src");
-    // edge_table_with_src_dst_index = convert_to_undirected(edge_table_with_src_dst_index);
+    if (to_undirected == "to_undirected") {
+      edge_table_with_src_dst_index = convert_to_undirected(edge_table_with_src_dst_index);
+    }
 
     auto table = SortKeys(edge_table_with_src_dst_index);
     edge_table_with_src_dst_index.reset();
 
     DCHECK_OK(WriteToFile(table, path_to_file + "-delta"));
     // DCHECK_OK(WriteToFileBaseLine(table, path_to_file + "-alter-delta"));
-    // DCHECK_OK(WriteToFileBaseLine(table, path_to_file+"-base"));
+    DCHECK_OK(WriteToFileBaseLine(table, path_to_file+"-base"));
     // writeToCsv(table, path_to_file + ".csv");
     auto offset = getOffsetTable(table, kSrcIndexCol, vertex_num);
     table.reset();
@@ -632,6 +641,15 @@ int main(int argc, char* argv[]) {
    std::string dst_file_type = std::string(argv[7]);
    std::string path_to_file = std::string(argv[8]);
    std::string reverse = std::string(argv[9]);
-   write_to_graphar(path_to_file, src_vertex_source_file, edge_source_file, dst_vertex_source_file, src_label, dst_label, src_file_type, dst_file_type, reverse);
-   // write_vertex_file(path_to_file, src_vertex_source_file, dst_vertex_source_file, edge_source_file);
+   std::string to_undirected = std::string(argv[10]);
+   bool just_vertex = false;
+   if (argc > 11) {
+     just_vertex = std::string(argv[11]) == "just_vertex";
+   }
+   if (just_vertex) {
+     write_vertex_file(path_to_file, src_vertex_source_file, dst_vertex_source_file, edge_source_file);
+   } else {
+      write_to_graphar(path_to_file, src_vertex_source_file, edge_source_file, dst_vertex_source_file, src_label, dst_label, src_file_type, dst_file_type, reverse, to_undirected);
+   }
+  return 0;
 }
