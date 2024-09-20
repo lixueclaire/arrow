@@ -249,7 +249,7 @@ void EdgeCsv2Parquet(
     }
     std::cout << "schema: " << edge_table->schema()->ToString() << std::endl;
 
-    DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file+"origin-base"));
+    DCHECK_OK(WriteToFileBaseLine(edge_table, path_to_file+"-origin-base"));
 
     return;
 }
