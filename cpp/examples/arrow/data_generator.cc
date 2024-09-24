@@ -19,6 +19,11 @@ limitations under the License.
 #include <sstream>
 #include <string>
 #include <optional>
+#include <tbb/parallel_sort.h>
+#include <vector>
+#include <thread>
+#include <utility>
+#include <chrono>
 
 #include "arrow/api.h"
 #include "arrow/csv/api.h"
@@ -266,6 +271,19 @@ std::shared_ptr<arrow::Table> DoHashJoin(
   // expected columns l_a, l_b
   std::shared_ptr<arrow::Table> response_table = arrow::acero::DeclarationToTable(std::move(hashjoin)).ValueOrDie();
   return response_table;
+}
+
+void ParSort(std::vector<std::pair<int, int>>& data) {
+  auto max_threads = std::thread::hardware_concurrency();
+  std::cout << "max_threads: " << max_threads << std::endl;
+
+  auto start = std::chrono::high_resolution_clock::now();
+  tbb::parallel_sort(data.begin(), data.end());
+
+  auto end = std::chrono::high_resolution_clock::now();
+
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+  std::cout << "Sorting took " << duration << " milliseconds.\n";
 }
 
 std::shared_ptr<arrow::Table> SortKeys(

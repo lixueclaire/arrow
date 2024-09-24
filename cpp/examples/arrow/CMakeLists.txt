@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+find_package(TBB REQUIRED)
+
 add_arrow_example(row_wise_conversion_example)
 
 add_arrow_example(rapidjson_row_converter)
@@ -161,8 +163,8 @@ if(ARROW_PARQUET AND ARROW_DATASET)
                     ${DATASET_EXAMPLES_LINK_LIBS})
   add_dependencies(execution-plan-documentation-examples parquet)
 
-  add_arrow_example(data_generator EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
-  add_arrow_example(data_generator_label EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
+  add_arrow_example(data_generator EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS} TBB::tbb)
+  add_arrow_example(data_generator_label EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS} TBB::tbb)
   add_arrow_example(Csv2Parquet EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
   add_arrow_example(Csv2Parquet_ldbc EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
   add_arrow_example(graphar_generator EXTRA_LINK_LIBS ${DATASET_EXAMPLES_LINK_LIBS})
